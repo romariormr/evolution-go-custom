@@ -52,6 +52,7 @@ type AccessService interface {
 	GroupIdsForInstance(instanceId string) ([]string, error)
 	ListSettings() (map[string]string, error)
 	SetSetting(key, value string) error
+	TestLdap() error
 
 	// escopo
 	AllowedInstanceIds(user *access_model.AccessUser) (map[string]bool, bool, error)
@@ -148,19 +149,79 @@ func (s *accessService) parseToken(token string) (*SessionClaims, error) {
 }
 
 func (s *accessService) Login(username, password string) (string, *access_model.AccessUser, error) {
-	u, err := s.repo.GetUserByUsername(strings.TrimSpace(strings.ToLower(username)))
+	username = strings.TrimSpace(strings.ToLower(username))
+	u, err := s.repo.GetUserByUsername(username)
+
+	if err != nil {
+		// Usuário não existe localmente → tenta LDAP e provisiona na primeira vez.
+		return s.loginViaLdap(username, password, nil)
+	}
+
+	switch u.AuthSource {
+	case access_model.AuthSourceLdap:
+		return s.loginViaLdap(username, password, u)
+	default:
+		if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)) != nil {
+			return "", nil, ErrInvalidCredentials
+		}
+		token, err := s.issueToken(u)
+		if err != nil {
+			return "", nil, err
+		}
+		return token, u, nil
+	}
+}
+
+// loginViaLdap autentica no AD e, se sucesso, cria (1ª vez) ou atualiza o usuário local
+// e sincroniza os grupos evo-go a partir do memberOf mapeado em AccessGroup.LdapGroupDN.
+// existing == nil significa "usuário ainda não existe localmente".
+func (s *accessService) loginViaLdap(username, password string, existing *access_model.AccessUser) (string, *access_model.AccessUser, error) {
+	_, displayName, groupDNs, err := AuthenticateLdap(s.repo, username, password)
 	if err != nil {
 		return "", nil, ErrInvalidCredentials
 	}
-	// fase 2: if u.AuthSource == ldap → bind LDAP aqui
-	if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)) != nil {
-		return "", nil, ErrInvalidCredentials
+
+	u := existing
+	if u == nil {
+		u = &access_model.AccessUser{
+			Username:    username,
+			DisplayName: displayName,
+			Role:        access_model.RoleUser,
+			AuthSource:  access_model.AuthSourceLdap,
+		}
+		if err := s.repo.CreateUser(u); err != nil {
+			return "", nil, err
+		}
+	} else if displayName != "" && displayName != u.DisplayName {
+		u.DisplayName = displayName
+		_ = s.repo.UpdateUser(u)
 	}
+
+	if err := s.syncLdapGroups(u.Id, groupDNs); err != nil {
+		fmt.Printf("[ACCESS][LDAP] falha ao sincronizar grupos de %s: %v\n", username, err)
+	}
+
 	token, err := s.issueToken(u)
 	if err != nil {
 		return "", nil, err
 	}
+	u, _ = s.repo.GetUserById(u.Id) // recarrega com grupos atualizados
 	return token, u, nil
+}
+
+// syncLdapGroups vincula o usuário a todo AccessGroup cujo LdapGroupDN bate com algum memberOf do AD.
+func (s *accessService) syncLdapGroups(userId string, groupDNs []string) error {
+	allGroups, err := s.repo.ListGroups()
+	if err != nil {
+		return err
+	}
+	matched := make([]string, 0, len(allGroups))
+	for _, g := range allGroups {
+		if matchGroupDNs(groupDNs, g.LdapGroupDN) {
+			matched = append(matched, g.Id)
+		}
+	}
+	return s.repo.SetUserGroups(userId, matched)
 }
 
 func (s *accessService) ValidateSession(token string) (*access_model.AccessUser, error) {
@@ -287,6 +348,7 @@ func (s *accessService) GroupIdsForInstance(instanceId string) ([]string, error)
 
 func (s *accessService) ListSettings() (map[string]string, error) { return s.repo.ListSettings() }
 func (s *accessService) SetSetting(key, value string) error       { return s.repo.SetSetting(key, value) }
+func (s *accessService) TestLdap() error                          { return TestLdapSettings(s.repo) }
 
 // ── escopo por grupo ─────────────────────────────────────────────
 
