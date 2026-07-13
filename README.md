@@ -1,3 +1,9 @@
+> [!TIP]
+> **Fork corrigido + deploy pronto**: imagem publica em `ghcr.io/romariormr/evolution-go-custom` (tags `latest` e semver).
+> Exemplos de deploy em [`deploy/`](deploy/): [`docker-compose.example.yml`](deploy/docker-compose.example.yml) (teste rapido),
+> [`portainer-stack.yml`](deploy/portainer-stack.yml) e [`portainer-stack-with-postgres.yml`](deploy/portainer-stack-with-postgres.yml) (Swarm + Traefik).
+> Detalhes e causa raiz do fix: [`DEPLOY.md`](DEPLOY.md). Node n8n: [`@romariormr/n8n-nodes-evogo`](https://www.npmjs.com/package/@romariormr/n8n-nodes-evogo).
+
 <h1 align="center">Evolution GO Custom</h1>
 
 <p align="center">
