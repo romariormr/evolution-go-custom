@@ -22,9 +22,11 @@ import type { Instance } from '@/types/instance';
 import * as instancesApi from '@/services/api/instances';
 import type { ConnectConfig } from '@/services/api/instances';
 import { useNavigate } from 'react-router-dom';
+import useAuth from '@/hooks/useAuth';
 
 export default function Instances() {
   const navigate = useNavigate();
+  const { authMode } = useAuth();
   const { instances, isLoading, hasLoaded, fetchInstances, removeInstance } =
     useInstancesStore();
   const [query, setQuery] = useState('');
@@ -503,7 +505,7 @@ export default function Instances() {
                 onDisconnect={handleDisconnect}
                 onSendMessage={openSendMessageModal}
                 onTestMessage={openTestMessageModal}
-                onSetProxy={openSetProxyModal}
+                onSetProxy={authMode === 'legacy' ? openSetProxyModal : undefined}
               />
             ))}
           </div>

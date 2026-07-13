@@ -15,6 +15,7 @@ import {
 
 type Props = {
   instanceId: string;
+  instanceToken?: string;
   connected: boolean;
 };
 
@@ -30,7 +31,7 @@ function formatRemaining(ms: number): string {
   return days > 0 ? `${days}d ${hms}` : hms;
 }
 
-export default function TimelockTimer({ instanceId, connected }: Props) {
+export default function TimelockTimer({ instanceId, instanceToken, connected }: Props) {
   const [timelock, setTimelock] = useState<ReachoutTimelock | null>(null);
   const [now, setNow] = useState(() => Date.now());
 
@@ -41,7 +42,7 @@ export default function TimelockTimer({ instanceId, connected }: Props) {
       return;
     }
     let cancelled = false;
-    getInstanceLimits(instanceId)
+    getInstanceLimits(instanceId, instanceToken)
       .then((limits) => {
         if (!cancelled) setTimelock(limits.reachoutTimelock);
       })
@@ -51,7 +52,7 @@ export default function TimelockTimer({ instanceId, connected }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [instanceId, connected]);
+  }, [instanceId, instanceToken, connected]);
 
   const active = !!timelock?.isActive && timelock.timeEnforcementEnds > 0;
 

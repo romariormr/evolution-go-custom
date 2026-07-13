@@ -1,218 +1,93 @@
-import React, { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import {
-  Button,
-  Input,
-  Label,
-  Alert,
-  AlertTitle,
-  AlertDescription,
-} from '@evoapi/design-system';
+import { Alert, AlertDescription, AlertTitle, Button, Input, Label } from '@evoapi/design-system';
+import { AlertCircle, KeyRound, UserRound } from 'lucide-react';
 import { toast } from 'sonner';
-import { useForm } from 'react-hook-form';
-import { z } from 'zod';
-import { zodResolver } from '@hookform/resolvers/zod';
-import { AlertCircle } from 'lucide-react';
-
 import useAuth from '@/hooks/useAuth';
 import { initRegister } from '@/services/api/license';
 
-export const Login: React.FC = () => {
-  const { login, checkLicense, setApiUrl, setApiKey: setStoreApiKey, isAuthenticated, licenseState, apiUrl: defaultApiUrl, apiKey: storedApiKey } = useAuth();
+type LoginMode = 'session' | 'legacy';
+
+export default function Login() {
+  const auth = useAuth();
   const navigate = useNavigate();
+  const [mode, setMode] = useState<LoginMode>('session');
+  const [apiUrl, setApiUrl] = useState(auth.apiUrl || window.location.origin);
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [apiKey, setApiKey] = useState(auth.apiKey || '');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  const [isLoading, setIsLoading] = useState(false);
-  const [loginError, setLoginError] = useState('');
-
-  // If user is already authenticated and licensed, redirect to dashboard
   useEffect(() => {
-    if (isAuthenticated && licenseState === 'licensed') {
-      navigate('/manager', { replace: true });
+    if (auth.isAuthenticated && (auth.authMode === 'session' || auth.licenseState === 'licensed')) {
+      navigate(auth.user?.mustChangePassword ? '/manager/change-password' : '/manager', { replace: true });
     }
-  }, [isAuthenticated, licenseState, navigate]);
-  
-  // Usar a URL atual do navegador como placeholder
-  const currentUrl = window.location.origin;
+  }, [auth.isAuthenticated, auth.authMode, auth.licenseState, auth.user, navigate]);
 
-  // Schema de validação para login
-const loginSchema = z.object({
-  apiUrl: z
-    .string()
-      .min(1, { message: 'URL da API é obrigatória' })
-      .url({ message: `URL inválida. Use o formato: ${currentUrl}` })
-    .refine((url) => url.startsWith('http://') || url.startsWith('https://'), {
-      message: 'URL deve começar com http:// ou https://',
-    }),
-  apiKey: z
-    .string()
-      .min(1, { message: 'API Key é obrigatória' })
-      .min(10, { message: 'API Key deve ter pelo menos 10 caracteres' }),
-});
-
-type LoginFormData = z.infer<typeof loginSchema>;
-
-  // Formulário de login
-  const loginForm = useForm<LoginFormData>({
-    resolver: zodResolver(loginSchema),
-    defaultValues: {
-      apiUrl: defaultApiUrl,
-      apiKey: storedApiKey || '',
-    },
-  });
-
-  const onLoginSubmit = async (data: LoginFormData) => {
-    setIsLoading(true);
-    setLoginError('');
-
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setLoading(true);
+    setError('');
     try {
-      // 1. Check license FIRST (before connecting to backend)
-      const cleanUrl = data.apiUrl.replace(/\/$/, '');
-      toast.info('Verificando licenca...');
-      const licResult = await checkLicense(cleanUrl, data.apiKey);
-
-      if (licResult !== 'licensed') {
-        // License not found - initiate registration (no need to connect to backend)
-        toast.info('Licenca necessaria', {
-          description: 'Redirecionando para registro de licenca...',
-        });
-
-        const callbackUrl = `${window.location.origin}/manager/license/callback`;
-        const registerData = await initRegister(callbackUrl, cleanUrl, data.apiKey);
-
-        if (!registerData.register_url) {
-          toast.error('Erro', {
-            description: registerData.message || 'Falha ao iniciar registro de licenca.',
-          });
-          setLoginError(registerData.message || 'Falha ao iniciar registro.');
+      if (mode === 'session') {
+        const user = await auth.loginWithPassword(apiUrl, username, password);
+        toast.success(`Bem-vindo${user.displayName ? `, ${user.displayName}` : ''}!`);
+        navigate(user.mustChangePassword ? '/manager/change-password' : '/manager', { replace: true });
+      } else {
+        const cleanUrl = apiUrl.replace(/\/$/, '');
+        const license = await auth.checkLicense(cleanUrl, apiKey);
+        if (license !== 'licensed') {
+          const callbackUrl = `${window.location.origin}/manager/license/callback`;
+          const registration = await initRegister(callbackUrl, cleanUrl, apiKey);
+          if (!registration.register_url) throw new Error(registration.message || 'Falha ao iniciar o registro da licença.');
+          auth.setApiUrl(cleanUrl);
+          auth.setApiKey(apiKey);
+          window.location.href = registration.register_url;
           return;
         }
-
-        // Save credentials so callback page knows where to call activate
-        setApiUrl(cleanUrl);
-        setStoreApiKey(data.apiKey);
-
-        // Redirect to licensing registration page
-        window.location.href = registerData.register_url;
-        return;
+        await auth.login(cleanUrl, apiKey);
+        toast.success('Conectado no modo legado.');
+        navigate('/manager', { replace: true });
       }
-
-      // 2. License OK - now connect to backend
-      await login(data.apiUrl, data.apiKey);
-
-      toast.success('Conectado com sucesso!', {
-        description: 'Licenca valida. Bem-vindo!',
-      });
-
-      navigate('/manager', { replace: true });
-    } catch (error) {
-      console.error('Erro ao fazer login:', error);
-      const errorMessage =
-        error instanceof Error
-          ? error.message
-          : 'Erro ao conectar. Verifique a URL e API Key.';
-
-      toast.error('Erro', {
-        description: errorMessage,
-      });
-
-      setLoginError(errorMessage);
+    } catch (caught) {
+      const message = (caught as { message?: string })?.message || 'Não foi possível entrar.';
+      setError(message);
+      toast.error(message);
     } finally {
-      setIsLoading(false);
+      setLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-t from-primary/20 via-background/95 to-background relative">
+    <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-t from-primary/20 via-background/95 to-background">
       <div className="w-full max-w-md space-y-6">
-        {/* Logo */}
-        <div className="text-center">
-          <h1 className="text-3xl font-bold text-primary">
-            Evolution GO
-          </h1>
-        </div>
+        <h1 className="text-center text-3xl font-bold text-primary">Evolution GO</h1>
+        <div className="rounded-lg border bg-background/80 p-6 shadow-lg backdrop-blur-sm">
+          <h2 className="text-2xl font-bold">Acessar o Manager</h2>
+          <p className="mt-1 text-sm text-muted-foreground">Entre com seu usuário ou use a API key administrativa.</p>
 
-        {/* Formulário */}
-        <div className="bg-background/80 backdrop-blur-sm border rounded-lg p-6 shadow-lg">
-          <div className="space-y-2 mb-6">
-            <h2 className="text-2xl font-bold">Entrar na sua conta</h2>
-            <p className="text-muted-foreground">Digite suas credenciais para acessar o sistema</p>
+          <div className="my-5 grid grid-cols-2 rounded-md bg-muted p-1">
+            <button type="button" onClick={() => setMode('session')} className={`flex items-center justify-center gap-2 rounded px-3 py-2 text-sm ${mode === 'session' ? 'bg-background shadow' : ''}`}>
+              <UserRound className="h-4 w-4" /> Usuário e senha
+            </button>
+            <button type="button" onClick={() => setMode('legacy')} className={`flex items-center justify-center gap-2 rounded px-3 py-2 text-sm ${mode === 'legacy' ? 'bg-background shadow' : ''}`}>
+              <KeyRound className="h-4 w-4" /> Modo legado
+            </button>
           </div>
 
-          {/* Mostrar mensagem de erro da aba login */}
-          {loginError && (
-            <Alert variant="destructive" className="mb-4">
-              <AlertCircle className="h-4 w-4" />
-              <AlertTitle>Erro</AlertTitle>
-              <AlertDescription>{loginError}</AlertDescription>
-            </Alert>
-          )}
+          {error && <Alert variant="destructive" className="mb-4"><AlertCircle className="h-4 w-4" /><AlertTitle>Erro ao entrar</AlertTitle><AlertDescription>{error}</AlertDescription></Alert>}
 
-          <form onSubmit={loginForm.handleSubmit(onLoginSubmit)} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="login-apiUrl">URL da API Evolution GO</Label>
-              <Input
-                id="login-apiUrl"
-                type="text"
-                placeholder={currentUrl}
-                disabled={isLoading}
-                {...loginForm.register('apiUrl')}
-              />
-              {loginForm.formState.errors.apiUrl && (
-                <p className="text-destructive text-sm">
-                  {loginForm.formState.errors.apiUrl.message}
-                </p>
-              )}
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="login-apiKey">API Key (GLOBAL_API_KEY)</Label>
-              <Input
-                id="login-apiKey"
-                type="password"
-                placeholder="Sua chave de API"
-                disabled={isLoading}
-                {...loginForm.register('apiKey')}
-              />
-              {loginForm.formState.errors.apiKey && (
-                <p className="text-destructive text-sm">
-                  {loginForm.formState.errors.apiKey.message}
-                </p>
-              )}
-            </div>
-
-            <div className="text-xs text-muted-foreground">
-              <p>
-                <strong>Dica:</strong> A API Key é o valor da variável{' '}
-                <code className="relative rounded bg-muted px-[0.3rem] py-[0.2rem] font-mono text-xs">
-                  GLOBAL_API_KEY
-                </code>{' '}
-                configurada no arquivo .env do Evolution GO.
-              </p>
-            </div>
-
-            <Button type="submit" disabled={isLoading} className="w-full">
-              {isLoading ? 'Conectando...' : 'Entrar'}
-            </Button>
+          <form onSubmit={submit} className="space-y-4">
+            <div className="space-y-2"><Label htmlFor="apiUrl">URL da API</Label><Input id="apiUrl" value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} required disabled={loading} /></div>
+            {mode === 'session' ? <>
+              <div className="space-y-2"><Label htmlFor="username">Usuário</Label><Input id="username" autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} required disabled={loading} /></div>
+              <div className="space-y-2"><Label htmlFor="password">Senha</Label><Input id="password" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required disabled={loading} /></div>
+            </> : <div className="space-y-2"><Label htmlFor="apiKey">API Key (GLOBAL_API_KEY)</Label><Input id="apiKey" type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} required minLength={10} disabled={loading} /><p className="text-xs text-muted-foreground">Fallback administrativo compatível com o fluxo anterior.</p></div>}
+            <Button type="submit" className="w-full" disabled={loading}>{loading ? 'Entrando...' : 'Entrar'}</Button>
           </form>
-        </div>
-
-        {/* Mensagem de termos de serviço */}
-        <div className="text-center text-xs text-muted-foreground">
-          <p>
-            Ao continuar, você concorda com nossos{' '}
-            <a href="#" className="underline hover:text-primary">
-              Termos de Serviço
-            </a>{' '}
-            e{' '}
-            <a href="#" className="underline hover:text-primary">
-              Política de Privacidade
-            </a>
-            .
-          </p>
         </div>
       </div>
     </div>
   );
-};
-
-export default Login;
+}
