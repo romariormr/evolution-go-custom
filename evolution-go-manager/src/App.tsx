@@ -12,14 +12,17 @@ import Events from '@/pages/Events';
 import Settings from '@/pages/Settings';
 import LicenseCallback from '@/pages/LicenseCallback';
 import ApiTester from '@/pages/ApiTester';
+import Admin from '@/pages/Admin';
+import ChangePassword from '@/pages/ChangePassword';
 import useAuth from '@/hooks/useAuth';
 import { DarkModeProvider } from '@/contexts/ThemeContext';
 
 function App() {
-  const { isAuthenticated, licenseState } = useAuth();
+  const { isAuthenticated, licenseState, authMode, user } = useAuth();
 
   // User must be authenticated AND have a valid license to access protected routes
-  const isFullyAuthorized = isAuthenticated && licenseState === 'licensed';
+  const isFullyAuthorized = isAuthenticated && (authMode === 'session' || licenseState === 'licensed');
+  const mustChangePassword = authMode === 'session' && user?.mustChangePassword;
 
   return (
     <DarkModeProvider>
@@ -37,9 +40,10 @@ function App() {
 
             {/* License Callback - Public (must be before the wildcard catch) */}
             <Route path="/manager/license/callback" element={<LicenseCallback />} />
+            <Route path="/manager/change-password" element={<ChangePassword />} />
 
             {/* Manager Protected Routes - requires auth + valid license */}
-            {isFullyAuthorized ? (
+            {isFullyAuthorized && !mustChangePassword ? (
               <Route path="/manager" element={<Layout />}>
               <Route index element={<Dashboard />} />
               <Route path="instances" element={<Instances />} />
@@ -48,6 +52,7 @@ function App() {
               <Route path="events" element={<Events />} />
               <Route path="api-tester" element={<ApiTester />} />
               <Route path="settings" element={<Settings />} />
+              <Route path="admin" element={user?.role === 'admin' ? <Admin /> : <Navigate to="/manager" replace />} />
             </Route>
             ) : (
               /* Redirect to login if not authenticated or not licensed */

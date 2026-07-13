@@ -12,6 +12,7 @@ import type {
   ConnectionState,
   InstanceStatus,
 } from '@/types/instance';
+import useAuthStore from '@/store/authStore';
 
 /**
  * Normalize raw instance data from Evolution GO API
@@ -59,7 +60,8 @@ const normalizeInstance = (raw: RawInstance): Instance => {
  * GET /instance/all
  */
 export const fetchInstances = async (): Promise<Instance[]> => {
-  const response = await apiClient.get<InstancesResponse>('/instance/all');
+  const session = useAuthStore.getState().authMode === 'session';
+  const response = await apiClient.get<InstancesResponse>(session ? '/access/instances' : '/instance/all');
   // Normalize the instances from Evolution GO format to our format
   return response.data.data.map(normalizeInstance);
 };
@@ -69,6 +71,12 @@ export const fetchInstances = async (): Promise<Instance[]> => {
  * GET /instance/info/:instanceId
  */
 export const fetchInstance = async (instanceId: string): Promise<Instance> => {
+  if (useAuthStore.getState().authMode === 'session') {
+    const instances = await fetchInstances();
+    const instance = instances.find((item) => item.id === instanceId);
+    if (!instance) throw new Error('Instância não encontrada ou não permitida para este usuário.');
+    return instance;
+  }
   const response = await apiClient.get<{
     message: string;
     data: RawInstance;
@@ -100,12 +108,13 @@ export interface InstanceLimits {
  * Returns the reachout timelock (cause of error 463) and new-chat quota.
  */
 export const getInstanceLimits = async (
-  instanceId: string
+  instanceId: string,
+  instanceToken?: string,
 ): Promise<InstanceLimits> => {
   const response = await apiClient.get<{
     message: string;
     data: InstanceLimits;
-  }>(`/instance/limits/${instanceId}`);
+  }>(`/instance/limits/${instanceId}`, instanceToken ? { headers: { apikey: instanceToken } } : undefined);
   return response.data.data;
 };
 
@@ -116,8 +125,12 @@ export const getInstanceLimits = async (
 export const createInstance = async (
   payload: CreateInstancePayload
 ): Promise<Instance> => {
-  const response = await apiClient.post<Instance>('/instance/create', payload);
-  return response.data;
+  if (useAuthStore.getState().authMode === 'session') {
+    const response = await apiClient.post<{ data: RawInstance }>('/access/instances', payload);
+    return normalizeInstance(response.data.data);
+  }
+  const response = await apiClient.post<RawInstance>('/instance/create', payload);
+  return normalizeInstance(response.data);
 };
 
 export interface ConnectConfig {
@@ -303,7 +316,8 @@ export const logoutInstance = async (instanceToken: string): Promise<void> => {
  * DELETE /instance/delete/:instanceId
  */
 export const deleteInstance = async (instanceId: string): Promise<void> => {
-  await apiClient.delete(`/instance/delete/${instanceId}`);
+  const session = useAuthStore.getState().authMode === 'session';
+  await apiClient.delete(session ? `/access/instances/${instanceId}` : `/instance/delete/${instanceId}`);
 };
 
 /**

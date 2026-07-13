@@ -4,7 +4,7 @@ import useAuth from '@/hooks/useAuth';
 import { useDarkMode } from '@/hooks/useDarkMode';
 
 function Header() {
-  const { logout, apiUrl } = useAuth();
+  const { logout, apiUrl, authMode, user } = useAuth();
   const { theme, toggleTheme } = useDarkMode();
 
   const handleLogout = () => {
@@ -24,7 +24,7 @@ function Header() {
 
       {/* Right side */}
       <div className="flex items-center gap-2 px-4">
-        <NavLink
+        {authMode === 'legacy' && <NavLink
           to="/manager/api-tester"
           className={({ isActive }) =>
             `flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
@@ -37,7 +37,9 @@ function Header() {
         >
           <TerminalSquare className="h-4 w-4" />
           <span className="hidden sm:inline">API Tester</span>
-        </NavLink>
+        </NavLink>}
+
+        {user && <div className="hidden border-l border-sidebar-border pl-3 text-right sm:block"><div className="text-sm font-medium">{user.displayName || user.username}</div><div className="text-xs text-muted-foreground">{user.role === 'admin' ? 'Administrador' : 'Usuário'}</div></div>}
 
         <a
           href={swaggerHref}
