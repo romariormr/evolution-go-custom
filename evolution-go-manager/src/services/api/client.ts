@@ -10,6 +10,7 @@ import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig } from 'ax
 // Create axios instance
 const apiClient: AxiosInstance = axios.create({
   timeout: 30000,
+  withCredentials: true,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -25,7 +26,7 @@ apiClient.interceptors.request.use(
       try {
         const parsed = JSON.parse(authData);
         // Zustand persist wraps data in { state: { ... } }
-        const { apiUrl, apiKey } = parsed.state || parsed;
+        const { apiUrl, apiKey, token, authMode } = parsed.state || parsed;
 
         // Only set baseURL if not explicitly provided in the request config
         if (apiUrl && !config.baseURL) {
@@ -34,8 +35,11 @@ apiClient.interceptors.request.use(
 
         // Only add admin apikey if NO apikey header was set
         // Instance-specific operations will set their own instance token
-        if (apiKey && !config.headers.has('apikey')) {
+        if (authMode === 'legacy' && apiKey && !config.headers.has('apikey')) {
           config.headers.set('apikey', apiKey);
+        }
+        if (authMode === 'session' && token && !config.headers.has('Authorization')) {
+          config.headers.set('Authorization', `Bearer ${token}`);
         }
       } catch (error) {
         console.error('Error parsing auth data:', error);
@@ -56,7 +60,7 @@ apiClient.interceptors.response.use(
   },
   (error: AxiosError) => {
     // Handle 401 Unauthorized - logout user and reset license
-    if (error.response?.status === 401) {
+    if (error.response?.status === 401 && !error.config?.url?.endsWith('/access/login')) {
       console.error('Unauthorized - clearing auth data');
       localStorage.removeItem('evolution-auth');
       window.location.href = '/manager/login';

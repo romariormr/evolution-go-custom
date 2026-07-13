@@ -24,6 +24,7 @@ import * as instancesApi from '@/services/api/instances';
 import useInstancesStore from '@/store/instancesStore';
 import type { CreateInstancePayload } from '@/types/instance';
 import { v4 as uuidv4 } from 'uuid';
+import useAuth from '@/hooks/useAuth';
 
 interface CreateInstanceModalProps {
   open: boolean;
@@ -42,6 +43,7 @@ const createInstanceSchema = z.object({
       'Nome deve conter apenas letras, números, hífen e underscore'
     ),
   token: z.string().optional(),
+  groupId: z.string().optional(),
   proxyHost: z.string().optional(),
   proxyPort: z.string().optional(),
   proxyUsername: z.string().optional(),
@@ -57,6 +59,7 @@ export default function CreateInstanceModal({
   const [isLoading, setIsLoading] = useState(false);
   const [showProxyConfig, setShowProxyConfig] = useState(false);
   const { addInstance, fetchInstances } = useInstancesStore();
+  const { authMode, user } = useAuth();
 
   const {
     register,
@@ -68,6 +71,7 @@ export default function CreateInstanceModal({
     defaultValues: {
       instanceName: '',
       token: '',
+      groupId: '',
       proxyHost: '',
       proxyPort: '',
       proxyUsername: '',
@@ -82,10 +86,11 @@ export default function CreateInstanceModal({
       const payload: CreateInstancePayload = {
         name: data.instanceName,
         token: data.token || uuidv4(), // Generate UUID if not provided
+        groupId: data.groupId || undefined,
       };
 
       // Add proxy configuration if provided
-      if (data.proxyHost && data.proxyPort) {
+      if (authMode === 'legacy' && data.proxyHost && data.proxyPort) {
         payload.proxy = {
           host: data.proxyHost,
           port: data.proxyPort,
@@ -187,8 +192,18 @@ export default function CreateInstanceModal({
             </p>
           </div>
 
+          {authMode === 'session' && (user?.groups?.length || 0) > 0 && (
+            <div className="space-y-2">
+              <Label htmlFor="groupId">Grupo responsável</Label>
+              <select id="groupId" {...register('groupId')} className="flex h-10 w-full rounded-md border border-sidebar-border bg-sidebar px-3 text-sm">
+                <option value="">{user?.role === 'admin' ? 'Sem grupo' : 'Primeiro grupo disponível'}</option>
+                {user?.groups?.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
+              </select>
+            </div>
+          )}
+
           {/* Proxy Configuration (Collapsible) */}
-          <div className="space-y-2">
+          {authMode === 'legacy' && <div className="space-y-2">
             <Button
               type="button"
               variant="outline"
@@ -279,7 +294,7 @@ export default function CreateInstanceModal({
                 </div>
               </div>
             )}
-          </div>
+          </div>}
 
           <DialogFooter className="flex gap-2 sm:gap-0">
             <Button

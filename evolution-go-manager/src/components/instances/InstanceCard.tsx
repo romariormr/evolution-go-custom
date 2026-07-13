@@ -113,7 +113,7 @@ export default function InstanceCard({
             </div>
           )}
 
-          <TimelockTimer instanceId={instance.id} connected={isConnected} />
+          <TimelockTimer instanceId={instance.id} instanceToken={instance.apikey} connected={isConnected} />
         </div>
 
         {/* Action buttons - hover effect */}
