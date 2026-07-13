@@ -5,12 +5,14 @@ import { AlertCircle, KeyRound, UserRound } from 'lucide-react';
 import { toast } from 'sonner';
 import useAuth from '@/hooks/useAuth';
 import { initRegister } from '@/services/api/license';
+import useBrandingStore from '@/store/brandingStore';
 
 type LoginMode = 'session' | 'legacy';
 
 export default function Login() {
   const auth = useAuth();
   const navigate = useNavigate();
+  const { branding } = useBrandingStore();
   const [mode, setMode] = useState<LoginMode>('session');
   const [apiUrl, setApiUrl] = useState(auth.apiUrl || window.location.origin);
   const [username, setUsername] = useState('');
@@ -62,7 +64,12 @@ export default function Login() {
   return (
     <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-t from-primary/20 via-background/95 to-background">
       <div className="w-full max-w-md space-y-6">
-        <h1 className="text-center text-3xl font-bold text-primary">Evolution GO</h1>
+        <div className="flex flex-col items-center gap-2">
+          {branding.logo && (
+            <img src={branding.logo} alt={branding.appName} className="h-12 w-12 rounded object-contain" />
+          )}
+          <h1 className="text-center text-3xl font-bold text-primary">{branding.appName}</h1>
+        </div>
         <div className="rounded-lg border bg-background/80 p-6 shadow-lg backdrop-blur-sm">
           <h2 className="text-2xl font-bold">Acessar o Manager</h2>
           <p className="mt-1 text-sm text-muted-foreground">Entre com seu usuário ou use a API key administrativa.</p>

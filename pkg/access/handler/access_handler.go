@@ -28,6 +28,7 @@ func RegisterRoutes(eng *gin.Engine, h *AccessHandler) {
 	{
 		pub.POST("/login", h.Login)
 		pub.POST("/logout", h.Logout)
+		pub.GET("/branding", h.Branding)
 	}
 
 	auth := eng.Group("/access")
@@ -103,6 +104,31 @@ func currentUser(ctx *gin.Context) *access_model.AccessUser {
 	}
 	u, _ := v.(*access_model.AccessUser)
 	return u
+}
+
+// ── branding (público) ────────────────────────────────────────────
+
+// brandingKeys: única lista de chaves de evogo_settings expostas sem
+// autenticação. NUNCA usar service.ListSettings() puro aqui — ele
+// devolveria ldap.bind_password e outros segredos de configuração.
+var brandingKeys = map[string]string{
+	"branding.app_name": "appName",
+	"branding.logo":     "logo",
+}
+
+const defaultAppName = "Evolution GO"
+
+func (h *AccessHandler) Branding(ctx *gin.Context) {
+	all, err := h.service.ListSettings()
+	out := gin.H{"appName": defaultAppName, "logo": ""}
+	if err == nil {
+		for settingKey, outKey := range brandingKeys {
+			if v, ok := all[settingKey]; ok && v != "" {
+				out[outKey] = v
+			}
+		}
+	}
+	ctx.JSON(http.StatusOK, out)
 }
 
 // ── auth ─────────────────────────────────────────────────────────
