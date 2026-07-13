@@ -1,6 +1,8 @@
-# Spec — Multi-tenant / Perfis de Acesso (Fase 1)
+# Spec — Multi-tenant / Perfis de Acesso
 
-> Status: PLANEJADO. Branch alvo: `feature/multi-tenant`.
+> Status: ✅ **CONCLUÍDO** (Fases 1, 2 e 3) — em produção desde `v0.9.0`.
+> Branches: `feature/multi-tenant` (Fase 1+3), `feature/ldap-auth` (Fase 2), ambas mergeadas em `main`.
+> Detalhes de acesso e checklist pós-projeto: `HANDOFF-SESSAO.md` (local, fora do git).
 
 ## Objetivo
 
