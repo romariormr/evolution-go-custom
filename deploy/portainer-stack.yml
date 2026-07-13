@@ -1,0 +1,67 @@
+# Evolution GO — stack Portainer (Docker Swarm) com banco PostgreSQL EXTERNO
+# Requisitos:
+#   - Imagem buildada no host: docker build -t evolution-go-custom:local .
+#   - Traefik já rodando no Swarm (ajuste TRAEFIK_NETWORK)
+#   - Bancos evogo_auth e evogo_users criados no PostgreSQL externo
+#
+# Variáveis de ambiente da stack (Portainer → Environment variables):
+#   GLOBAL_API_KEY   — chave global da API (uuid forte)
+#   EVOGO_DOMAIN     — domínio público (Traefik), ex: evolutiongo.exemplo.com
+#   DB_HOST          — host do PostgreSQL externo
+#   DB_USER          — usuário do banco (owner dos DBs evogo_auth/evogo_users)
+#   DB_PASSWORD      — senha do usuário
+
+version: "3.8"
+
+services:
+  evolution-go:
+    image: evolution-go-custom:local
+    environment:
+      SERVER_PORT: "4000"
+      CLIENT_NAME: "evolution-go"
+      GLOBAL_API_KEY: "${GLOBAL_API_KEY}"
+      POSTGRES_AUTH_DB: "postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:5432/evogo_auth?sslmode=disable"
+      POSTGRES_USERS_DB: "postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:5432/evogo_users?sslmode=disable"
+      DATABASE_SAVE_MESSAGES: "true"
+      WADEBUG: "INFO"
+      LOGTYPE: "console"
+      LOG_DIRECTORY: "/app/logs"
+      CONNECT_ON_STARTUP: "false"
+      WEBHOOK_FILES: "true"
+      OS_NAME: "Linux"
+      WEBHOOK_URL: ""
+      AMQP_GLOBAL_ENABLED: "false"
+      NATS_GLOBAL_ENABLED: "false"
+      MINIO_ENABLED: "false"
+      EVENT_IGNORE_GROUP: "false"
+      EVENT_IGNORE_STATUS: "true"
+      QRCODE_MAX_COUNT: "5"
+      CHECK_USER_EXISTS: "true"
+    ports:
+      - "4000:4000"
+    volumes:
+      - evolution_go_data:/app/dbdata
+      - evolution_go_logs:/app/logs
+    networks:
+      - traefik_net
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+        delay: 10s
+      labels:
+        traefik.enable: "true"
+        traefik.docker.network: "${TRAEFIK_NETWORK:-minha_rede}"
+        traefik.http.routers.evolutiongo.rule: "Host(`${EVOGO_DOMAIN}`)"
+        traefik.http.routers.evolutiongo.entrypoints: "websecure"
+        traefik.http.routers.evolutiongo.tls: "true"
+        traefik.http.services.evolutiongo.loadbalancer.server.port: "4000"
+
+volumes:
+  evolution_go_data:
+  evolution_go_logs:
+
+networks:
+  traefik_net:
+    external: true
+    name: "${TRAEFIK_NETWORK:-minha_rede}"

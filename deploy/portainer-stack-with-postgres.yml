@@ -1,0 +1,99 @@
+# Evolution GO — stack Portainer (Docker Swarm) com PostgreSQL INCLUSO na stack
+# Requisitos:
+#   - Imagem buildada no host: docker build -t evolution-go-custom:local .
+#   - Traefik já rodando no Swarm (ajuste TRAEFIK_NETWORK)
+#
+# Variáveis de ambiente da stack (Portainer → Environment variables):
+#   GLOBAL_API_KEY    — chave global da API (uuid forte)
+#   POSTGRES_PASSWORD — senha do postgres interno
+#   EVOGO_DOMAIN      — domínio público (Traefik)
+
+version: "3.8"
+
+services:
+  evolution-go:
+    image: evolution-go-custom:local
+    environment:
+      SERVER_PORT: "4000"
+      CLIENT_NAME: "evolution-go"
+      GLOBAL_API_KEY: "${GLOBAL_API_KEY}"
+      POSTGRES_AUTH_DB: "postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/evogo_auth?sslmode=disable"
+      POSTGRES_USERS_DB: "postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/evogo_users?sslmode=disable"
+      DATABASE_SAVE_MESSAGES: "true"
+      WADEBUG: "INFO"
+      LOGTYPE: "console"
+      CONNECT_ON_STARTUP: "false"
+      WEBHOOK_FILES: "true"
+      OS_NAME: "Linux"
+      AMQP_GLOBAL_ENABLED: "false"
+      NATS_GLOBAL_ENABLED: "false"
+      MINIO_ENABLED: "false"
+      EVENT_IGNORE_STATUS: "true"
+      QRCODE_MAX_COUNT: "5"
+      CHECK_USER_EXISTS: "true"
+    ports:
+      - "4000:4000"
+    volumes:
+      - evolution_go_data:/app/dbdata
+      - evolution_go_logs:/app/logs
+    networks:
+      - internal
+      - traefik_net
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+        delay: 10s
+      labels:
+        traefik.enable: "true"
+        traefik.docker.network: "${TRAEFIK_NETWORK:-minha_rede}"
+        traefik.http.routers.evolutiongo.rule: "Host(`${EVOGO_DOMAIN}`)"
+        traefik.http.routers.evolutiongo.entrypoints: "websecure"
+        traefik.http.routers.evolutiongo.tls: "true"
+        traefik.http.services.evolutiongo.loadbalancer.server.port: "4000"
+
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: "postgres"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+      POSTGRES_DB: "postgres"
+    volumes:
+      - evolution_go_pgdata:/var/lib/postgresql/data
+    networks:
+      - internal
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+
+  # Job one-shot: cria os bancos evogo_auth e evogo_users (idempotente)
+  postgres-init:
+    image: postgres:15-alpine
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        until pg_isready -h postgres -U postgres; do sleep 2; done
+        psql -h postgres -U postgres -tc "SELECT 1 FROM pg_database WHERE datname='evogo_auth'" | grep -q 1 || psql -h postgres -U postgres -c "CREATE DATABASE evogo_auth"
+        psql -h postgres -U postgres -tc "SELECT 1 FROM pg_database WHERE datname='evogo_users'" | grep -q 1 || psql -h postgres -U postgres -c "CREATE DATABASE evogo_users"
+        echo "init done"
+    environment:
+      PGPASSWORD: "${POSTGRES_PASSWORD}"
+    networks:
+      - internal
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: none
+
+volumes:
+  evolution_go_data:
+  evolution_go_logs:
+  evolution_go_pgdata:
+
+networks:
+  internal:
+    driver: overlay
+  traefik_net:
+    external: true
+    name: "${TRAEFIK_NETWORK:-minha_rede}"
