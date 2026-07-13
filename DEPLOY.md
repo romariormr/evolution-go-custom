@@ -25,7 +25,19 @@ publicado **não compila** (`stat /build/cmd/evolution-go: directory not found`)
 4. **`deploy/portainer-stack.yml`**: stack Swarm com PostgreSQL externo + labels Traefik
 5. **`deploy/portainer-stack-with-postgres.yml`**: stack Swarm com PostgreSQL incluso + job de init dos bancos
 
-## Build da imagem
+## Imagem Docker
+
+### Opção 1 — imagem pronta (ghcr.io, recomendado)
+
+Publicada automaticamente via GitHub Actions a cada push na `main` (tag `latest`) e a cada tag `v*` (tag semver):
+
+```bash
+docker pull ghcr.io/romariormr/evolution-go-custom:latest   # ou :0.7.1
+```
+
+As stacks do Portainer já usam essa imagem por padrão (variável `EVOGO_IMAGE` para sobrescrever).
+
+### Opção 2 — build local
 
 No host Docker (primeiro build compila Go + frontend React, ~5 min):
 
@@ -34,6 +46,8 @@ git clone https://github.com/romariormr/evolution-go-custom.git
 cd evolution-go-custom
 docker build -t evolution-go-custom:local .
 ```
+
+Se usar build local, defina `EVOGO_IMAGE=evolution-go-custom:local` nas env vars da stack.
 
 ## Deploy via Portainer (Swarm)
 

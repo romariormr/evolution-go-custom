@@ -15,7 +15,7 @@ version: "3.8"
 
 services:
   evolution-go:
-    image: evolution-go-custom:local
+    image: "${EVOGO_IMAGE:-ghcr.io/romariormr/evolution-go-custom:latest}"
     environment:
       SERVER_PORT: "4000"
       CLIENT_NAME: "evolution-go"

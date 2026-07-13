@@ -18,4 +18,4 @@ coverage.*
 manager/dist/
 evolution-go-manager/node_modules/
 evolution-go-manager/dist/
-.github/workflows/
+
