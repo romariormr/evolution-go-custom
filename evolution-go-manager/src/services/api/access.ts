@@ -26,6 +26,7 @@ export const unlinkInstance = (groupId: string, instanceId: string) =>
 export const listSettings = async () => data<Record<string, string>>(await apiClient.get('/access/admin/settings'));
 export const setSetting = (key: string, value: string) =>
   apiClient.put(`/access/admin/settings/${encodeURIComponent(key)}`, { value });
+export const testLdap = () => apiClient.post('/access/admin/settings/ldap/test');
 
 export const normalizeAccessInstance = (raw: RawInstance): Instance => ({
   id: raw.id,

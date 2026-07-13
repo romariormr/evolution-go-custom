@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Button, Input, Label } from '@evoapi/design-system';
-import { Loader2, RefreshCw, Save, Trash2 } from 'lucide-react';
+import { Loader2, PlugZap, RefreshCw, Save, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import * as accessApi from '@/services/api/access';
 import * as instancesApi from '@/services/api/instances';
@@ -11,6 +11,20 @@ import useAuth from '@/hooks/useAuth';
 type Section = 'users' | 'groups' | 'links' | 'settings';
 
 const errorMessage = (error: unknown) => (error as { message?: string })?.message || 'A operação não pôde ser concluída.';
+
+type LdapField = { key: string; label: string; placeholder?: string; kind: 'text' | 'password' | 'boolean' };
+
+const LDAP_FIELDS: LdapField[] = [
+  { key: 'ldap.enabled', label: 'Habilitado', kind: 'boolean' },
+  { key: 'ldap.url', label: 'URL', placeholder: 'ldaps://ad.dominio.local:636', kind: 'text' },
+  { key: 'ldap.bind_dn', label: 'Bind DN (conta de serviço)', placeholder: 'CN=svc-evogo,OU=Integracoes,DC=dominio,DC=local', kind: 'text' },
+  { key: 'ldap.bind_password', label: 'Senha da conta de serviço', kind: 'password' },
+  { key: 'ldap.base_dn', label: 'Base DN (busca)', placeholder: 'OU=GrupoNewland,DC=dominio,DC=local', kind: 'text' },
+  { key: 'ldap.user_filter', label: 'Filtro de usuário', placeholder: '(sAMAccountName=%s)', kind: 'text' },
+  { key: 'ldap.group_attribute', label: 'Atributo de grupo', placeholder: 'memberOf', kind: 'text' },
+  { key: 'ldap.start_tls', label: 'StartTLS (ldap:// + upgrade)', kind: 'boolean' },
+  { key: 'ldap.skip_verify_tls', label: 'Ignorar erro de certificado TLS', kind: 'boolean' },
+];
 
 export default function Admin() {
   const { user: currentUser } = useAuth();
@@ -24,6 +38,7 @@ export default function Admin() {
   const [newGroup, setNewGroup] = useState({ name: '', ldapGroupDn: '' });
   const [link, setLink] = useState({ groupId: '', instanceId: '' });
   const [newSetting, setNewSetting] = useState({ key: '', value: '' });
+  const [testingLdap, setTestingLdap] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -92,6 +107,20 @@ export default function Admin() {
     catch (error) { toast.error(errorMessage(error)); }
   };
 
+  const saveLdapConfig = async () => {
+    try {
+      await Promise.all(LDAP_FIELDS.map((field) => accessApi.setSetting(field.key, settings[field.key] ?? '')));
+      toast.success('Configuração LDAP salva.');
+    } catch (error) { toast.error(errorMessage(error)); }
+  };
+
+  const testLdap = async () => {
+    setTestingLdap(true);
+    try { await accessApi.testLdap(); toast.success('Conexão LDAP bem-sucedida.'); }
+    catch (error) { toast.error(errorMessage(error)); }
+    finally { setTestingLdap(false); }
+  };
+
   if (loading) return <div className="flex h-full items-center justify-center"><Loader2 className="h-7 w-7 animate-spin" /></div>;
 
   return <div className="mx-auto max-w-6xl space-y-6 p-6">
@@ -114,6 +143,31 @@ export default function Admin() {
 
     {section === 'links' && <div className="max-w-2xl space-y-4 rounded-lg border p-5"><p className="text-sm text-muted-foreground">Selecione os dois itens e aplique ou remova o vínculo. A API atual não expõe uma consulta dos vínculos existentes.</p><div><Label>Grupo</Label><select className="h-10 w-full rounded-md border bg-background px-3" value={link.groupId} onChange={(e) => setLink({ ...link, groupId: e.target.value })}><option value="">Selecione...</option>{groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select></div><div><Label>Instância</Label><select className="h-10 w-full rounded-md border bg-background px-3" value={link.instanceId} onChange={(e) => setLink({ ...link, instanceId: e.target.value })}><option value="">Selecione...</option>{instances.map((instance) => <option key={instance.id} value={instance.id}>{instance.instanceName}</option>)}</select></div><div className="flex gap-2"><Button onClick={() => void changeLink('link')}>Vincular</Button><Button variant="outline" onClick={() => void changeLink('unlink')}>Remover vínculo</Button></div></div>}
 
-    {section === 'settings' && <div className="space-y-4"><div className="rounded-lg border"><div className="grid grid-cols-[minmax(12rem,1fr)_2fr_auto] gap-3 border-b bg-muted p-3 font-medium"><span>Chave</span><span>Valor</span><span /></div>{Object.entries(settings).map(([key, value]) => <div key={key} className="grid grid-cols-[minmax(12rem,1fr)_2fr_auto] gap-3 border-b p-3 last:border-0"><code className="self-center text-xs">{key}</code><Input value={value} onChange={(e) => setSettings({ ...settings, [key]: e.target.value })} /><Button variant="outline" onClick={() => void saveSetting(key, settings[key])}><Save className="h-4 w-4" /></Button></div>)}</div><form onSubmit={(e) => { e.preventDefault(); if (newSetting.key) { void saveSetting(newSetting.key, newSetting.value); setNewSetting({ key: '', value: '' }); } }} className="grid gap-3 rounded-lg border p-4 md:grid-cols-[1fr_2fr_auto]"><Input placeholder="nova.chave" value={newSetting.key} onChange={(e) => setNewSetting({ ...newSetting, key: e.target.value })} required /><Input placeholder="Valor" value={newSetting.value} onChange={(e) => setNewSetting({ ...newSetting, value: e.target.value })} /><Button>Adicionar</Button></form></div>}
+    {section === 'settings' && <div className="space-y-6">
+      <div className="rounded-lg border p-5">
+        <div className="mb-4 flex items-center justify-between">
+          <div><h3 className="font-semibold">Autenticação LDAP / Active Directory</h3><p className="text-sm text-muted-foreground">Login por conta do domínio e sincronização automática de grupos via memberOf.</p></div>
+          <Button variant="outline" onClick={() => void testLdap()} disabled={testingLdap}>{testingLdap ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PlugZap className="mr-2 h-4 w-4" />}Testar conexão</Button>
+        </div>
+        <div className="grid gap-4 md:grid-cols-2">
+          {LDAP_FIELDS.map((field) => (
+            <div key={field.key} className={field.kind === 'boolean' ? 'flex items-center gap-2 pt-6' : 'space-y-2'}>
+              {field.kind === 'boolean' ? (
+                <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={settings[field.key] === 'true'} onChange={(e) => setSettings({ ...settings, [field.key]: e.target.checked ? 'true' : 'false' })} />{field.label}</label>
+              ) : (
+                <><Label>{field.label}</Label><Input type={field.kind === 'password' ? 'password' : 'text'} placeholder={field.placeholder} value={settings[field.key] ?? ''} onChange={(e) => setSettings({ ...settings, [field.key]: e.target.value })} /></>
+              )}
+            </div>
+          ))}
+        </div>
+        <Button className="mt-4" onClick={() => void saveLdapConfig()}><Save className="mr-2 h-4 w-4" />Salvar configuração LDAP</Button>
+      </div>
+
+      <div className="space-y-4">
+        <h3 className="font-semibold">Outras configurações</h3>
+        <div className="rounded-lg border"><div className="grid grid-cols-[minmax(12rem,1fr)_2fr_auto] gap-3 border-b bg-muted p-3 font-medium"><span>Chave</span><span>Valor</span><span /></div>{Object.entries(settings).filter(([key]) => !key.startsWith('ldap.')).map(([key, value]) => <div key={key} className="grid grid-cols-[minmax(12rem,1fr)_2fr_auto] gap-3 border-b p-3 last:border-0"><code className="self-center text-xs">{key}</code><Input value={value} onChange={(e) => setSettings({ ...settings, [key]: e.target.value })} /><Button variant="outline" onClick={() => void saveSetting(key, settings[key])}><Save className="h-4 w-4" /></Button></div>)}</div>
+        <form onSubmit={(e) => { e.preventDefault(); if (newSetting.key) { void saveSetting(newSetting.key, newSetting.value); setNewSetting({ key: '', value: '' }); } }} className="grid gap-3 rounded-lg border p-4 md:grid-cols-[1fr_2fr_auto]"><Input placeholder="nova.chave" value={newSetting.key} onChange={(e) => setNewSetting({ ...newSetting, key: e.target.value })} required /><Input placeholder="Valor" value={newSetting.value} onChange={(e) => setNewSetting({ ...newSetting, value: e.target.value })} /><Button>Adicionar</Button></form>
+      </div>
+    </div>}
   </div>;
 }

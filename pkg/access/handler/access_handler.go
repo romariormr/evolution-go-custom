@@ -57,6 +57,7 @@ func RegisterRoutes(eng *gin.Engine, h *AccessHandler) {
 
 		admin.GET("/settings", h.AdminListSettings)
 		admin.PUT("/settings/:key", h.AdminSetSetting)
+		admin.POST("/settings/ldap/test", h.AdminTestLdap)
 	}
 }
 
@@ -396,4 +397,12 @@ func (h *AccessHandler) AdminSetSetting(ctx *gin.Context) {
 		return
 	}
 	ctx.JSON(http.StatusOK, gin.H{"message": "configuração salva"})
+}
+
+func (h *AccessHandler) AdminTestLdap(ctx *gin.Context) {
+	if err := h.service.TestLdap(); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"message": "conexão LDAP bem-sucedida"})
 }
