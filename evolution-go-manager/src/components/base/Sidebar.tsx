@@ -2,8 +2,10 @@ import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard,
   Smartphone,
+  ShieldCheck,
 } from 'lucide-react';
 import { cn } from '@/utils/cn';
+import useAuth from '@/hooks/useAuth';
 
 const navItems = [
   { to: '/manager', label: 'Dashboard', icon: LayoutDashboard },
@@ -12,6 +14,10 @@ const navItems = [
 
 function Sidebar() {
   const currentYear = new Date().getFullYear();
+  const { user } = useAuth();
+  const items = user?.role === 'admin'
+    ? [...navItems, { to: '/manager/admin', label: 'Administração', icon: ShieldCheck }]
+    : navItems;
 
   return (
     <div className="hidden md:flex bg-sidebar text-sidebar-foreground flex-col w-56 border-r border-sidebar-border">
@@ -24,7 +30,7 @@ function Sidebar() {
 
       {/* Navigation Menu */}
       <nav className="space-y-1.5 flex-1 px-2 py-4">
-        {navItems.map((item) => (
+        {items.map((item) => (
           <NavLink
             key={item.to}
             to={item.to}

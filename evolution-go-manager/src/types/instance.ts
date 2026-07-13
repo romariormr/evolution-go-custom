@@ -69,6 +69,7 @@ export interface CreateInstancePayload {
   instanceId?: string;
   name: string;
   token: string;
+  groupId?: string;
   proxy?: {
     host: string;
     port: string;
