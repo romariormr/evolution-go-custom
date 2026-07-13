@@ -11,8 +11,8 @@ coverage.*
 .DS_Store
 
 # Compiled binaries
-evolution-go
-server
+/evolution-go
+/server
 
 # Frontend (built in Docker)
 manager/dist/
