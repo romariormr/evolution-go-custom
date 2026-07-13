@@ -19,3 +19,6 @@ manager/dist/
 evolution-go-manager/node_modules/
 evolution-go-manager/dist/
 
+
+# Handoff local com segredos — NUNCA publicar (repo publico)
+HANDOFF-SESSAO.md
