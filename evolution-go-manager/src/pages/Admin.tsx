@@ -7,12 +7,18 @@ import * as instancesApi from '@/services/api/instances';
 import type { AccessGroup, AccessUser } from '@/types/auth';
 import type { Instance } from '@/types/instance';
 import useAuth from '@/hooks/useAuth';
+import useBrandingStore from '@/store/brandingStore';
 
 type Section = 'users' | 'groups' | 'links' | 'settings';
 
 const errorMessage = (error: unknown) => (error as { message?: string })?.message || 'A operação não pôde ser concluída.';
 
 type LdapField = { key: string; label: string; placeholder?: string; kind: 'text' | 'password' | 'boolean' };
+
+const BRANDING_FIELDS: LdapField[] = [
+  { key: 'branding.app_name', label: 'Nome do sistema', placeholder: 'Evolution GO', kind: 'text' },
+  { key: 'branding.logo', label: 'Logo (URL ou data URI)', placeholder: 'https://.../logo.png', kind: 'text' },
+];
 
 const LDAP_FIELDS: LdapField[] = [
   { key: 'ldap.enabled', label: 'Habilitado', kind: 'boolean' },
@@ -107,6 +113,14 @@ export default function Admin() {
     catch (error) { toast.error(errorMessage(error)); }
   };
 
+  const saveBrandingConfig = async () => {
+    try {
+      await Promise.all(BRANDING_FIELDS.map((field) => accessApi.setSetting(field.key, settings[field.key] ?? '')));
+      await useBrandingStore.getState().refresh();
+      toast.success('Marca atualizada.');
+    } catch (error) { toast.error(errorMessage(error)); }
+  };
+
   const saveLdapConfig = async () => {
     try {
       await Promise.all(LDAP_FIELDS.map((field) => accessApi.setSetting(field.key, settings[field.key] ?? '')));
@@ -145,6 +159,19 @@ export default function Admin() {
 
     {section === 'settings' && <div className="space-y-6">
       <div className="rounded-lg border p-5">
+        <div className="mb-4"><h3 className="font-semibold">Marca (Branding)</h3><p className="text-sm text-muted-foreground">Nome e logo exibidos no login e no menu — vazio usa o padrão "Evolution GO".</p></div>
+        <div className="grid gap-4 md:grid-cols-2">
+          {BRANDING_FIELDS.map((field) => (
+            <div key={field.key} className="space-y-2">
+              <Label>{field.label}</Label>
+              <Input placeholder={field.placeholder} value={settings[field.key] ?? ''} onChange={(e) => setSettings({ ...settings, [field.key]: e.target.value })} />
+            </div>
+          ))}
+        </div>
+        <Button className="mt-4" onClick={() => void saveBrandingConfig()}><Save className="mr-2 h-4 w-4" />Salvar marca</Button>
+      </div>
+
+      <div className="rounded-lg border p-5">
         <div className="mb-4 flex items-center justify-between">
           <div><h3 className="font-semibold">Autenticação LDAP / Active Directory</h3><p className="text-sm text-muted-foreground">Login por conta do domínio e sincronização automática de grupos via memberOf.</p></div>
           <Button variant="outline" onClick={() => void testLdap()} disabled={testingLdap}>{testingLdap ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PlugZap className="mr-2 h-4 w-4" />}Testar conexão</Button>
@@ -165,7 +192,7 @@ export default function Admin() {
 
       <div className="space-y-4">
         <h3 className="font-semibold">Outras configurações</h3>
-        <div className="rounded-lg border"><div className="grid grid-cols-[minmax(12rem,1fr)_2fr_auto] gap-3 border-b bg-muted p-3 font-medium"><span>Chave</span><span>Valor</span><span /></div>{Object.entries(settings).filter(([key]) => !key.startsWith('ldap.')).map(([key, value]) => <div key={key} className="grid grid-cols-[minmax(12rem,1fr)_2fr_auto] gap-3 border-b p-3 last:border-0"><code className="self-center text-xs">{key}</code><Input value={value} onChange={(e) => setSettings({ ...settings, [key]: e.target.value })} /><Button variant="outline" onClick={() => void saveSetting(key, settings[key])}><Save className="h-4 w-4" /></Button></div>)}</div>
+        <div className="rounded-lg border"><div className="grid grid-cols-[minmax(12rem,1fr)_2fr_auto] gap-3 border-b bg-muted p-3 font-medium"><span>Chave</span><span>Valor</span><span /></div>{Object.entries(settings).filter(([key]) => !key.startsWith('ldap.') && !key.startsWith('branding.')).map(([key, value]) => <div key={key} className="grid grid-cols-[minmax(12rem,1fr)_2fr_auto] gap-3 border-b p-3 last:border-0"><code className="self-center text-xs">{key}</code><Input value={value} onChange={(e) => setSettings({ ...settings, [key]: e.target.value })} /><Button variant="outline" onClick={() => void saveSetting(key, settings[key])}><Save className="h-4 w-4" /></Button></div>)}</div>
         <form onSubmit={(e) => { e.preventDefault(); if (newSetting.key) { void saveSetting(newSetting.key, newSetting.value); setNewSetting({ key: '', value: '' }); } }} className="grid gap-3 rounded-lg border p-4 md:grid-cols-[1fr_2fr_auto]"><Input placeholder="nova.chave" value={newSetting.key} onChange={(e) => setNewSetting({ ...newSetting, key: e.target.value })} required /><Input placeholder="Valor" value={newSetting.value} onChange={(e) => setNewSetting({ ...newSetting, value: e.target.value })} /><Button>Adicionar</Button></form>
       </div>
     </div>}

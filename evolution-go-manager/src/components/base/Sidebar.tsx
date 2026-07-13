@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/utils/cn';
 import useAuth from '@/hooks/useAuth';
+import useBrandingStore from '@/store/brandingStore';
 
 const navItems = [
   { to: '/manager', label: 'Dashboard', icon: LayoutDashboard },
@@ -15,6 +16,7 @@ const navItems = [
 function Sidebar() {
   const currentYear = new Date().getFullYear();
   const { user } = useAuth();
+  const { branding } = useBrandingStore();
   const items = user?.role === 'admin'
     ? [...navItems, { to: '/manager/admin', label: 'Administração', icon: ShieldCheck }]
     : navItems;
@@ -22,9 +24,12 @@ function Sidebar() {
   return (
     <div className="hidden md:flex bg-sidebar text-sidebar-foreground flex-col w-56 border-r border-sidebar-border">
       {/* Logo Header */}
-      <div className="h-16 flex items-center px-4 border-b border-sidebar-border">
-        <h2 className="text-lg font-bold text-primary">
-          Evolution GO
+      <div className="h-16 flex items-center gap-2 px-4 border-b border-sidebar-border">
+        {branding.logo && (
+          <img src={branding.logo} alt={branding.appName} className="h-8 w-8 rounded object-contain" />
+        )}
+        <h2 className="text-lg font-bold text-primary truncate">
+          {branding.appName}
         </h2>
       </div>
 
@@ -56,7 +61,7 @@ function Sidebar() {
 
       {/* Sidebar Footer */}
       <div className="mt-auto p-4 border-t border-sidebar-border">
-        <div className="text-sm text-primary font-medium">Evolution GO</div>
+        <div className="text-sm text-primary font-medium">{branding.appName}</div>
         <div className="text-xs text-muted-foreground mt-1">
           © {currentYear} All rights reserved
         </div>

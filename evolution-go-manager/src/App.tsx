@@ -16,9 +16,16 @@ import Admin from '@/pages/Admin';
 import ChangePassword from '@/pages/ChangePassword';
 import useAuth from '@/hooks/useAuth';
 import { DarkModeProvider } from '@/contexts/ThemeContext';
+import useBrandingStore from '@/store/brandingStore';
+import { useEffect } from 'react';
 
 function App() {
   const { isAuthenticated, licenseState, authMode, user } = useAuth();
+  const loadBranding = useBrandingStore((state) => state.load);
+
+  useEffect(() => {
+    void loadBranding();
+  }, [loadBranding]);
 
   // User must be authenticated AND have a valid license to access protected routes
   const isFullyAuthorized = isAuthenticated && (authMode === 'session' || licenseState === 'licensed');
