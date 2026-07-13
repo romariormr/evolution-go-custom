@@ -59,8 +59,13 @@ apiClient.interceptors.response.use(
     return response;
   },
   (error: AxiosError) => {
-    // Handle 401 Unauthorized - logout user and reset license
-    if (error.response?.status === 401 && !error.config?.url?.endsWith('/access/login')) {
+    // Handle 401 Unauthorized - logout user and reset license.
+    // Só derruba a sessão para chamadas em /access/* (rotas que dependem da sessão
+    // JWT). Um 401 de rota legada (ex.: /instance/limits, admin-only, chamada por
+    // engano com token de instância) não deve invalidar a sessão inteira do usuário.
+    const requestUrl = error.config?.url || '';
+    const isSessionRoute = requestUrl.includes('/access/') && !requestUrl.endsWith('/access/login');
+    if (error.response?.status === 401 && isSessionRoute) {
       console.error('Unauthorized - clearing auth data');
       localStorage.removeItem('evolution-auth');
       window.location.href = '/manager/login';

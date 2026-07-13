@@ -12,6 +12,7 @@ import {
   getInstanceLimits,
   type ReachoutTimelock,
 } from "@/services/api/instances";
+import useAuth from "@/hooks/useAuth";
 
 type Props = {
   instanceId: string;
@@ -31,18 +32,24 @@ function formatRemaining(ms: number): string {
   return days > 0 ? `${days}d ${hms}` : hms;
 }
 
-export default function TimelockTimer({ instanceId, instanceToken, connected }: Props) {
+export default function TimelockTimer({ instanceId, connected }: Props) {
+  const { authMode, apiKey } = useAuth();
   const [timelock, setTimelock] = useState<ReachoutTimelock | null>(null);
   const [now, setNow] = useState(() => Date.now());
 
   // Fetch the timelock when the instance is connected.
+  // GET /instance/limits/:id é rota ADMIN (exige a API key global, não o token da
+  // instância). Em modo legado o admin já possui essa chave; em modo sessão o
+  // frontend nunca a guarda, então a busca é pulada (limitação conhecida — ver
+  // HANDOFF/roadmap). Antes disso o componente enviava o token da instância por
+  // engano, gerando 401 e derrubando a sessão inteira via interceptor global.
   useEffect(() => {
-    if (!connected) {
+    if (!connected || authMode !== "legacy" || !apiKey) {
       setTimelock(null);
       return;
     }
     let cancelled = false;
-    getInstanceLimits(instanceId, instanceToken)
+    getInstanceLimits(instanceId, apiKey)
       .then((limits) => {
         if (!cancelled) setTimelock(limits.reachoutTimelock);
       })
@@ -52,7 +59,7 @@ export default function TimelockTimer({ instanceId, instanceToken, connected }: 
     return () => {
       cancelled = true;
     };
-  }, [instanceId, instanceToken, connected]);
+  }, [instanceId, connected, authMode, apiKey]);
 
   const active = !!timelock?.isActive && timelock.timeEnforcementEnds > 0;
 
