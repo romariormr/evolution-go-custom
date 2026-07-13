@@ -1,0 +1,63 @@
+# Evolution GO — exemplo mínimo com docker compose (sem Swarm, sem Traefik)
+# Usa a imagem pública do ghcr.io — não precisa buildar nada.
+#
+# Uso:
+#   1. Copie este arquivo:  cp docker-compose.example.yml docker-compose.yml
+#   2. Troque os valores de GLOBAL_API_KEY e POSTGRES_PASSWORD
+#   3. docker compose up -d
+#   4. Manager: http://SEU_IP:4000/manager  (login = GLOBAL_API_KEY)
+#
+# Para produção com Portainer/Swarm + Traefik, use:
+#   - portainer-stack.yml               (PostgreSQL externo)
+#   - portainer-stack-with-postgres.yml (PostgreSQL incluso)
+
+services:
+  evolution-go:
+    image: ghcr.io/romariormr/evolution-go-custom:latest
+    container_name: evolution-go
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    environment:
+      SERVER_PORT: "4000"
+      CLIENT_NAME: "evolution-go"
+      GLOBAL_API_KEY: "TROQUE-POR-UM-UUID-FORTE"
+      POSTGRES_AUTH_DB: "postgresql://postgres:TROQUE-A-SENHA@postgres:5432/evogo_auth?sslmode=disable"
+      POSTGRES_USERS_DB: "postgresql://postgres:TROQUE-A-SENHA@postgres:5432/evogo_users?sslmode=disable"
+      DATABASE_SAVE_MESSAGES: "true"
+      CONNECT_ON_STARTUP: "true"
+      WADEBUG: "INFO"
+      LOGTYPE: "console"
+      WEBHOOK_FILES: "true"
+      OS_NAME: "Linux"
+      EVENT_IGNORE_STATUS: "true"
+      QRCODE_MAX_COUNT: "5"
+      CHECK_USER_EXISTS: "true"
+    volumes:
+      - evolution_data:/app/dbdata
+      - evolution_logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: evolution-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: "TROQUE-A-SENHA"
+      POSTGRES_DB: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+volumes:
+  evolution_data:
+  evolution_logs:
+  postgres_data:
