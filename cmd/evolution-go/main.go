@@ -21,6 +21,10 @@ import (
 	"gorm.io/gorm"
 	_ "modernc.org/sqlite"
 
+	access_handler "github.com/EvolutionAPI/evolution-go/pkg/access/handler"
+	access_model "github.com/EvolutionAPI/evolution-go/pkg/access/model"
+	access_repository "github.com/EvolutionAPI/evolution-go/pkg/access/repository"
+	access_service "github.com/EvolutionAPI/evolution-go/pkg/access/service"
 	call_handler "github.com/EvolutionAPI/evolution-go/pkg/call/handler"
 	call_service "github.com/EvolutionAPI/evolution-go/pkg/call/service"
 	chat_handler "github.com/EvolutionAPI/evolution-go/pkg/chat/handler"
@@ -236,6 +240,14 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 		server_handler.NewServerHandler(),
 	).AssignRoutes(r)
 
+	// Controle de acesso (usuários/grupos) — rotas /access/*
+	accessRepository := access_repository.NewAccessRepository(db)
+	accessService := access_service.NewAccessService(accessRepository, config)
+	if err := accessService.Bootstrap(); err != nil {
+		log.Printf("[ACCESS] bootstrap falhou: %v", err)
+	}
+	access_handler.RegisterRoutes(r, access_handler.NewAccessHandler(accessService, instanceService))
+
 	if config.ConnectOnStartup {
 		go whatsmeowService.ConnectOnStartup(config.ClientName)
 	}
@@ -257,7 +269,16 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 }
 
 func migrate(db *gorm.DB) {
-	err := db.AutoMigrate(&instance_model.Instance{}, &message_model.Message{}, &label_model.Label{})
+	err := db.AutoMigrate(
+		&instance_model.Instance{},
+		&message_model.Message{},
+		&label_model.Label{},
+		&access_model.AccessUser{},
+		&access_model.AccessGroup{},
+		&access_model.AccessUserGroup{},
+		&access_model.AccessGroupInstance{},
+		&access_model.AccessSetting{},
+	)
 
 	if err != nil {
 		log.Fatal(err)
