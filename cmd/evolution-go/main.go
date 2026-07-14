@@ -246,7 +246,15 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 	if err := accessService.Bootstrap(); err != nil {
 		log.Printf("[ACCESS] bootstrap falhou: %v", err)
 	}
-	access_handler.RegisterRoutes(r, access_handler.NewAccessHandler(accessService, instanceService))
+	var logoBaseURL string
+	if config.MinioEnabled {
+		scheme := "http"
+		if config.MinioUseSSL {
+			scheme = "https"
+		}
+		logoBaseURL = fmt.Sprintf("%s://%s/%s", scheme, config.MinioEndpoint, config.MinioBucket)
+	}
+	access_handler.RegisterRoutes(r, access_handler.NewAccessHandler(accessService, instanceService, mediaStorage, logoBaseURL))
 
 	if config.ConnectOnStartup {
 		go whatsmeowService.ConnectOnStartup(config.ClientName)

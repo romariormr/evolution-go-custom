@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Input, Label } from '@evoapi/design-system';
-import { Loader2, PlugZap, RefreshCw, Save, Trash2 } from 'lucide-react';
+import { Loader2, PlugZap, RefreshCw, Save, Trash2, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import * as accessApi from '@/services/api/access';
 import * as instancesApi from '@/services/api/instances';
@@ -45,6 +45,8 @@ export default function Admin() {
   const [link, setLink] = useState({ groupId: '', instanceId: '' });
   const [newSetting, setNewSetting] = useState({ key: '', value: '' });
   const [testingLdap, setTestingLdap] = useState(false);
+  const [uploadingLogo, setUploadingLogo] = useState(false);
+  const logoInputRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -121,6 +123,17 @@ export default function Admin() {
     } catch (error) { toast.error(errorMessage(error)); }
   };
 
+  const uploadLogo = async (file: File) => {
+    setUploadingLogo(true);
+    try {
+      const url = await accessApi.uploadLogo(file);
+      setSettings((state) => ({ ...state, 'branding.logo': url }));
+      await useBrandingStore.getState().refresh();
+      toast.success('Logo enviada pro MinIO.');
+    } catch (error) { toast.error(errorMessage(error)); }
+    finally { setUploadingLogo(false); }
+  };
+
   const saveLdapConfig = async () => {
     try {
       await Promise.all(LDAP_FIELDS.map((field) => accessApi.setSetting(field.key, settings[field.key] ?? '')));
@@ -164,10 +177,21 @@ export default function Admin() {
           {BRANDING_FIELDS.map((field) => (
             <div key={field.key} className="space-y-2">
               <Label>{field.label}</Label>
-              <Input placeholder={field.placeholder} value={settings[field.key] ?? ''} onChange={(e) => setSettings({ ...settings, [field.key]: e.target.value })} />
+              {field.key === 'branding.logo' ? (
+                <div className="flex gap-2">
+                  <Input placeholder={field.placeholder} value={settings[field.key] ?? ''} onChange={(e) => setSettings({ ...settings, [field.key]: e.target.value })} />
+                  <input ref={logoInputRef} type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" className="hidden" onChange={(e) => { const file = e.target.files?.[0]; if (file) void uploadLogo(file); e.target.value = ''; }} />
+                  <Button type="button" variant="outline" onClick={() => logoInputRef.current?.click()} disabled={uploadingLogo}>
+                    {uploadingLogo ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+                  </Button>
+                </div>
+              ) : (
+                <Input placeholder={field.placeholder} value={settings[field.key] ?? ''} onChange={(e) => setSettings({ ...settings, [field.key]: e.target.value })} />
+              )}
             </div>
           ))}
         </div>
+        <p className="mt-2 text-xs text-muted-foreground">Envie um arquivo (vai pro MinIO) ou cole uma URL/data URI direto no campo.</p>
         <Button className="mt-4" onClick={() => void saveBrandingConfig()}><Save className="mr-2 h-4 w-4" />Salvar marca</Button>
       </div>
 

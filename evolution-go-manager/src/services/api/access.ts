@@ -28,6 +28,15 @@ export const setSetting = (key: string, value: string) =>
   apiClient.put(`/access/admin/settings/${encodeURIComponent(key)}`, { value });
 export const testLdap = () => apiClient.post('/access/admin/settings/ldap/test');
 
+export const uploadLogo = async (file: File): Promise<string> => {
+  const form = new FormData();
+  form.append('logo', file);
+  const response = await apiClient.post<{ url: string }>('/access/admin/branding/logo', form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+  return response.data.url;
+};
+
 export const normalizeAccessInstance = (raw: RawInstance): Instance => ({
   id: raw.id,
   instanceName: raw.name,
