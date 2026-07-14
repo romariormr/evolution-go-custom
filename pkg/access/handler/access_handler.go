@@ -1,12 +1,15 @@
 package access_handler
 
 import (
+	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
 	access_model "github.com/EvolutionAPI/evolution-go/pkg/access/model"
 	access_service "github.com/EvolutionAPI/evolution-go/pkg/access/service"
 	instance_service "github.com/EvolutionAPI/evolution-go/pkg/instance/service"
+	storage_interfaces "github.com/EvolutionAPI/evolution-go/pkg/storage/interfaces"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
@@ -16,10 +19,12 @@ const sessionCookie = "evogo_session"
 type AccessHandler struct {
 	service         access_service.AccessService
 	instanceService instance_service.InstanceService
+	mediaStorage    storage_interfaces.MediaStorage // nil se MINIO_ENABLED=false
+	logoBaseURL     string                          // ex.: http://minio:9000/evo-go — vazio se MinIO desabilitado
 }
 
-func NewAccessHandler(service access_service.AccessService, instanceService instance_service.InstanceService) *AccessHandler {
-	return &AccessHandler{service: service, instanceService: instanceService}
+func NewAccessHandler(service access_service.AccessService, instanceService instance_service.InstanceService, mediaStorage storage_interfaces.MediaStorage, logoBaseURL string) *AccessHandler {
+	return &AccessHandler{service: service, instanceService: instanceService, mediaStorage: mediaStorage, logoBaseURL: logoBaseURL}
 }
 
 // RegisterRoutes monta o grupo /access no engine.
@@ -59,6 +64,7 @@ func RegisterRoutes(eng *gin.Engine, h *AccessHandler) {
 		admin.GET("/settings", h.AdminListSettings)
 		admin.PUT("/settings/:key", h.AdminSetSetting)
 		admin.POST("/settings/ldap/test", h.AdminTestLdap)
+		admin.POST("/branding/logo", h.AdminUploadLogo)
 	}
 }
 
@@ -423,6 +429,79 @@ func (h *AccessHandler) AdminSetSetting(ctx *gin.Context) {
 		return
 	}
 	ctx.JSON(http.StatusOK, gin.H{"message": "configuração salva"})
+}
+
+const maxLogoSize = 3 << 20 // 3 MiB
+
+var allowedLogoTypes = map[string]bool{
+	"image/png":  true,
+	"image/jpeg": true,
+	"image/webp": true,
+	"image/svg+xml": true,
+}
+
+// AdminUploadLogo: sobe a logo pro MinIO (MEDIA_STORAGE já usado pra mídia do
+// WhatsApp) e salva a URL pública resultante em evogo_settings["branding.logo"].
+func (h *AccessHandler) AdminUploadLogo(ctx *gin.Context) {
+	if h.mediaStorage == nil {
+		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "MinIO não está configurado (MINIO_ENABLED=false)"})
+		return
+	}
+
+	fileHeader, err := ctx.FormFile("logo")
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "arquivo 'logo' é obrigatório"})
+		return
+	}
+	if fileHeader.Size > maxLogoSize {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "arquivo maior que 3MB"})
+		return
+	}
+	contentType := fileHeader.Header.Get("Content-Type")
+	if !allowedLogoTypes[contentType] {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "formato inválido: use PNG, JPEG, WebP ou SVG"})
+		return
+	}
+
+	file, err := fileHeader.Open()
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "falha ao abrir o arquivo enviado"})
+		return
+	}
+	defer file.Close()
+	data, err := io.ReadAll(file)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "falha ao ler o arquivo enviado"})
+		return
+	}
+
+	ext := "png"
+	switch contentType {
+	case "image/jpeg":
+		ext = "jpg"
+	case "image/webp":
+		ext = "webp"
+	case "image/svg+xml":
+		ext = "svg"
+	}
+	fileName := fmt.Sprintf("branding-logo-%s.%s", uuid.NewString(), ext)
+
+	// Store() devolve URL assinada (expira em 7 dias) — inadequado pra logo,
+	// que precisa ser permanente. O bucket já é configurado como público na
+	// construção do storage, então montamos a URL pública fixa nós mesmos,
+	// sem alterar o storage compartilhado (usado no pipeline de mídia do WhatsApp).
+	if _, err := h.mediaStorage.Store(ctx.Request.Context(), data, fileName, contentType); err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "falha ao enviar pro MinIO: " + err.Error()})
+		return
+	}
+	url := fmt.Sprintf("%s/evolution-go-medias/%s", h.logoBaseURL, fileName)
+
+	if err := h.service.SetSetting("branding.logo", url); err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	ctx.JSON(http.StatusOK, gin.H{"url": url})
 }
 
 func (h *AccessHandler) AdminTestLdap(ctx *gin.Context) {
