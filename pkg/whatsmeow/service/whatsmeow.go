@@ -1125,6 +1125,21 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 	case *events.Message:
 		doWebhook = true
 		postMap["event"] = "Message"
+		// Keep a canonical per-chat activity index. Group metadata does not carry
+		// the last message timestamp, so this event is the authoritative source.
+		if mycli.config.DatabaseSaveMessages {
+			message := message_model.Message{
+				MessageID: evt.Info.ID,
+				Timestamp: evt.Info.Timestamp.Format("2006-01-02 15:04:05"),
+				Status:    "Received",
+				Source:    evt.Info.Chat.String(),
+			}
+			go func() {
+				if err := mycli.messageRepository.InsertMessage(message); err != nil {
+					mycli.loggerWrapper.GetLogger(mycli.userID).LogWarn("[%s] failed to index message activity: %v", mycli.userID, err)
+				}
+			}()
+		}
 		// Message received
 
 		// Log message arrival with detailed info

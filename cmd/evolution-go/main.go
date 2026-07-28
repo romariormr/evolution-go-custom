@@ -18,6 +18,7 @@ import (
 	"github.com/gomessguii/logger"
 	"github.com/joho/godotenv"
 	"go.mau.fi/whatsmeow"
+	waStore "go.mau.fi/whatsmeow/store"
 	"gorm.io/gorm"
 	_ "modernc.org/sqlite"
 
@@ -194,7 +195,7 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 	userService := user_service.NewUserService(clientPointer, whatsmeowService, loggerWrapper)
 	messageService := message_service.NewMessageService(clientPointer, messageRepository, whatsmeowService, loggerWrapper)
 	chatService := chat_service.NewChatService(clientPointer, whatsmeowService, loggerWrapper)
-	groupService := group_service.NewGroupService(clientPointer, whatsmeowService, loggerWrapper)
+	groupService := group_service.NewGroupService(clientPointer, whatsmeowService, loggerWrapper, messageRepository)
 	callService := call_service.NewCallService(clientPointer, whatsmeowService, loggerWrapper)
 	communityService := community_service.NewCommunityService(clientPointer, whatsmeowService, loggerWrapper)
 	labelService := label_service.NewLabelService(clientPointer, whatsmeowService, labelRepository, loggerWrapper)
@@ -365,6 +366,17 @@ func main() {
 	cfg := config.Load()
 
 	logger.LogInfo("Starting Evolution GO version %s", version)
+
+	// Busca a versao atual do WhatsApp Web na inicializacao. Sem isso o client roda
+	// sempre com a versao hardcoded do whatsmeow-lib (congelada desde o vendor), e o
+	// WhatsApp degrada silenciosamente acoes sensiveis (ex.: criar grupo trava sem erro)
+	// pra clients com fingerprint de versao antiga, mesmo com mensageria funcionando normal.
+	if latestVer, err := whatsmeow.GetLatestVersion(context.Background(), nil); err != nil {
+		logger.LogWarn("Failed to fetch latest WhatsApp Web version, using built-in fallback: %v", err)
+	} else {
+		waStore.SetWAVersion(*latestVer)
+		logger.LogInfo("Using WhatsApp Web version %s", latestVer.String())
+	}
 
 	startTime := time.Now()
 

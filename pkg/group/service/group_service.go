@@ -11,6 +11,7 @@ import (
 
 	instance_model "github.com/EvolutionAPI/evolution-go/pkg/instance/model"
 	logger_wrapper "github.com/EvolutionAPI/evolution-go/pkg/logger"
+	message_repository "github.com/EvolutionAPI/evolution-go/pkg/message/repository"
 	"github.com/EvolutionAPI/evolution-go/pkg/utils"
 	whatsmeow_service "github.com/EvolutionAPI/evolution-go/pkg/whatsmeow/service"
 	"github.com/gin-gonic/gin"
@@ -40,6 +41,7 @@ type groupService struct {
 	clientPointer    map[string]*whatsmeow.Client
 	whatsmeowService whatsmeow_service.WhatsmeowService
 	loggerWrapper    *logger_wrapper.LoggerManager
+	messageRepository message_repository.MessageRepository
 }
 
 type SimpleGroupInfo struct {
@@ -177,6 +179,26 @@ func (g *groupService) ListGroups(instance *instance_model.Instance) ([]*types.G
 		gc.Groups = append(gc.Groups, simpleGroup)
 	}
 
+	sources := make([]string, 0, len(resp)*2)
+	for _, info := range resp {
+		sources = append(sources, info.JID.String(), info.JID.User)
+	}
+	latest, err := g.messageRepository.GetLatestMessages(sources)
+	if err != nil {
+		g.loggerWrapper.GetLogger(instance.Id).LogWarn("[%s] could not enrich groups with latest message: %v", instance.Id, err)
+		return resp, nil
+	}
+	for _, info := range resp {
+		message, ok := latest[info.JID.String()]
+		if !ok {
+			message, ok = latest[info.JID.User]
+		}
+		if ok {
+			info.LastMessageID = message.MessageID
+			info.LastMessageAt = message.Timestamp
+			info.LastMessageStatus = message.Status
+		}
+	}
 	return resp, nil
 }
 
@@ -645,10 +667,12 @@ func NewGroupService(
 	clientPointer map[string]*whatsmeow.Client,
 	whatsmeowService whatsmeow_service.WhatsmeowService,
 	loggerWrapper *logger_wrapper.LoggerManager,
+	messageRepository message_repository.MessageRepository,
 ) GroupService {
 	return &groupService{
 		clientPointer:    clientPointer,
 		whatsmeowService: whatsmeowService,
 		loggerWrapper:    loggerWrapper,
+		messageRepository: messageRepository,
 	}
 }

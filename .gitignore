@@ -19,6 +19,10 @@ manager/dist/
 evolution-go-manager/node_modules/
 evolution-go-manager/dist/
 
+# Saída local do grafo de conhecimento (artefato de análise)
+graphify-out/
+pkg/graphify-out/
+
 
 # Handoff local com segredos — NUNCA publicar (repo publico)
 HANDOFF-SESSAO.md
