@@ -1,5 +1,10 @@
 # Evolution GO - Changelog
 
+## v0.11.2
+
+### Fixes
+- Group metadata parsing now accepts WhatsApp responses that omit `creation` for legacy/community groups, avoiding misleading parse warnings while preserving the group with an unknown creation date.
+
 ## v0.11.1
 
 ### Improvements

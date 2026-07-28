@@ -717,7 +717,10 @@ func (cli *Client) parseGroupNode(groupNode *waBinary.Node) (*types.GroupInfo, e
 	group.NameSetBy = ag.OptionalJIDOrEmpty("s_o")
 	group.NameSetByPN = ag.OptionalJIDOrEmpty("s_o_pn")
 
-	group.GroupCreated = ag.UnixTime("creation")
+	// WhatsApp occasionally omits `creation` for legacy/community groups in
+	// the participating-groups response. Treat it as unknown instead of
+	// turning an otherwise valid group into a parse warning.
+	group.GroupCreated = ag.OptionalUnixTime("creation")
 	group.CreatorCountryCode = ag.OptionalString("creator_country_code")
 
 	group.AnnounceVersionID = ag.OptionalString("a_v_id")
