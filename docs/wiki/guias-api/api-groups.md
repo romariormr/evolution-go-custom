@@ -21,6 +21,12 @@ Documentação completa dos endpoints para gerenciar grupos WhatsApp.
 
 ## Listar Grupos
 
+### Data da última mensagem
+
+Quando `DATABASE_SAVE_MESSAGES=true`, cada grupo pode retornar `lastMessageAt`, `lastMessageId` e `lastMessageStatus`. Esses campos vêm do índice local de eventos `Message` e representam atividade real do chat.
+
+`NameSetAt`, `TopicSetAt` e `GroupCreated` são metadados do grupo; não devem ser usados para concluir que o grupo está inativo. Se `lastMessageAt` não estiver presente, a atividade é desconhecida. Mensagens anteriores à ativação do índice não são reconstruídas automaticamente.
+
 Lista todos os grupos que você participa.
 
 **Endpoint**: `GET /group/list`

@@ -92,6 +92,10 @@ CREATE DATABASE evogo_users OWNER evogo;
 
 ## Pós-deploy
 
+### Atualização 0.11.1 — atividade dos grupos
+
+Depois de atualizar a imagem, confirme `DATABASE_SAVE_MESSAGES=true`. Novos eventos `Message` serão indexados por JID e aparecerão em `GET /group/list` como `lastMessageAt`. Registros anteriores não são reconstruídos automaticamente.
+
 - Manager: `https://EVOGO_DOMAIN/manager` (login com a `GLOBAL_API_KEY`)
 - Swagger: `https://EVOGO_DOMAIN/swagger/index.html`
 - Criar instância no Manager → escanear QR code → status `open`

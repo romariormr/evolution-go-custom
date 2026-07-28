@@ -47,6 +47,12 @@ type GroupInfo struct {
 
 	// Suspended indicates whether the group is currently paused/suspended.
 	Suspended bool
+
+	// LastMessage* are populated by the Evolution GO service from its local
+	// message index. WhatsApp's group metadata endpoint does not provide them.
+	LastMessageID     string `json:"lastMessageId,omitempty"`
+	LastMessageAt     string `json:"lastMessageAt,omitempty"`
+	LastMessageStatus string `json:"lastMessageStatus,omitempty"`
 }
 
 type GroupMembershipApprovalMode struct {

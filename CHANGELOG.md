@@ -1,5 +1,16 @@
 # Evolution GO - Changelog
 
+## v0.11.1
+
+### Improvements
+- **Real group activity**: `GET /group/list` now exposes `lastMessageAt`, `lastMessageId` and `lastMessageStatus` from the local message index.
+- **Incoming message indexing**: `Message` events are persisted by canonical JID so the latest activity can be identified per group.
+- **Legacy compatibility**: activity lookup accepts rows stored without the server suffix in the JID.
+
+### Fixes
+- Group listing no longer treats name/description changes as the last message date.
+- Groups without indexed activity are not automatically classified as inactive.
+
 ## v0.7.1
 
 **Docker:** `evoapicloud/evolution-go:0.7.1`
