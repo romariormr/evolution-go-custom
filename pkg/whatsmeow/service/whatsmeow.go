@@ -898,46 +898,13 @@ func GetCachedAccountLimits(instanceID string) (*AccountLimitsCacheEntry, bool) 
 	return v.(*AccountLimitsCacheEntry), true
 }
 
-// logAccountLimits queries WhatsApp's MEX endpoints for the account's new-chat message
-// capping and reachout timelock state, logs them, and caches the result. Error 463 on sends
-// to NEW contacts is caused by these account-level limits, not by local code.
-func (mycli *MyClient) logAccountLimits() {
-	client := mycli.WAClient
-	if client == nil {
-		return
-	}
-	go func() {
-		ctx := context.Background()
-		entry := &AccountLimitsCacheEntry{FetchedAt: time.Now()}
-		got := false
-		if capInfo, err := client.GetNewChatMessageCappingInfo(ctx); err != nil {
-			mycli.loggerWrapper.GetLogger(mycli.userID).LogWarn("[%s] Failed to fetch new-chat message capping info: %v", mycli.userID, err)
-		} else if capInfo != nil {
-			entry.CappingStatus = string(capInfo.CappingStatus)
-			entry.TotalQuota = capInfo.TotalQuota
-			entry.UsedQuota = capInfo.UsedQuota
-			entry.CycleEnds = capInfo.CycleEndTimestamp.Unix()
-			got = true
-			mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] NEW-CHAT CAPPING: status=%s used=%d/%d cycleEnds=%s ote=%s mv=%s",
-				mycli.userID, capInfo.CappingStatus, capInfo.UsedQuota, capInfo.TotalQuota, capInfo.CycleEndTimestamp.Time, capInfo.OTEStatus, capInfo.MVStatus)
-		}
-		if tl, err := client.GetAccountReachoutTimelock(ctx); err != nil {
-			mycli.loggerWrapper.GetLogger(mycli.userID).LogWarn("[%s] Failed to fetch reachout timelock: %v", mycli.userID, err)
-		} else if tl != nil {
-			entry.ReachoutActive = tl.IsActive
-			if tl.IsActive {
-				entry.ReachoutEnds = tl.TimeEnforcementEnds.Unix()
-			}
-			entry.ReachoutType = string(tl.EnforcementType)
-			got = true
-			mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] REACHOUT TIMELOCK: active=%t ends=%s type=%s",
-				mycli.userID, tl.IsActive, tl.TimeEnforcementEnds.Time, tl.EnforcementType)
-		}
-		if got {
-			accountLimitsCache.Store(mycli.userID, entry)
-		}
-	}()
-}
+// logAccountLimits chamava GetNewChatMessageCappingInfo/GetAccountReachoutTimelock,
+// dois metodos que existiam so no whatsmeow-lib vendorizado (chamavam sendMexIQ, nao
+// exportado pelo whatsmeow oficial). Removidos ao migrar pro go.mau.fi/whatsmeow oficial
+// (fix do "Client outdated (405)" causado pelo fork congelado) -- reimplementar exigiria
+// falar o protocolo MEX do zero, fora de escopo por ora. Cache/getter ficam de pe pra nao
+// quebrar quem consome /instance/limits; so nunca mais populam.
+func (mycli *MyClient) logAccountLimits() {}
 
 func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 	userID := mycli.userID

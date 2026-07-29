@@ -427,65 +427,13 @@ func (i instances) Status(instance *instance_model.Instance) (*StatusStruct, err
 	return status, nil
 }
 
-// GetLimits returns WhatsApp's reachout timelock and new-chat messaging quota for an
-// instance — the account-level limits behind error 463. It serves the value cached on
-// connect (the MEX queries are slow/rate-limited); on a cache miss it does a live query
-// with a short timeout so the HTTP request never hangs.
+// GetLimits retornava o reachout timelock e a quota de new-chat messaging (limites de
+// conta por tras do erro 463), via GetAccountReachoutTimelock/GetNewChatMessageCappingInfo
+// -- metodos que so existiam no whatsmeow-lib vendorizado. Removidos ao migrar pro
+// go.mau.fi/whatsmeow oficial (fix do "Client outdated (405)"); ver logAccountLimits em
+// pkg/whatsmeow/service/whatsmeow.go pro motivo completo. Sempre retorna vazio por ora.
 func (i instances) GetLimits(instanceId string) (*LimitsStruct, error) {
-	if e, ok := whatsmeow_service.GetCachedAccountLimits(instanceId); ok {
-		result := &LimitsStruct{
-			ReachoutTimelock: &ReachoutTimelockStruct{
-				IsActive:            e.ReachoutActive,
-				TimeEnforcementEnds: e.ReachoutEnds,
-				EnforcementType:     e.ReachoutType,
-			},
-		}
-		if e.CappingStatus != "" {
-			result.NewChatCapping = &NewChatCappingStruct{
-				CappingStatus: e.CappingStatus,
-				TotalQuota:    e.TotalQuota,
-				UsedQuota:     e.UsedQuota,
-				CycleEnds:     e.CycleEnds,
-			}
-		}
-		return result, nil
-	}
-
-	client, err := i.ensureClientConnected(instanceId)
-	if err != nil {
-		return nil, err
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
-	defer cancel()
-	result := &LimitsStruct{}
-
-	if tl, err := client.GetAccountReachoutTimelock(ctx); err != nil {
-		i.loggerWrapper.GetLogger(instanceId).LogWarn("[%s] Failed to fetch reachout timelock: %v", instanceId, err)
-	} else if tl != nil {
-		var ends int64
-		if tl.IsActive {
-			ends = tl.TimeEnforcementEnds.Unix()
-		}
-		result.ReachoutTimelock = &ReachoutTimelockStruct{
-			IsActive:            tl.IsActive,
-			TimeEnforcementEnds: ends,
-			EnforcementType:     string(tl.EnforcementType),
-		}
-	}
-
-	if capping, err := client.GetNewChatMessageCappingInfo(ctx); err != nil {
-		i.loggerWrapper.GetLogger(instanceId).LogWarn("[%s] Failed to fetch new-chat capping info: %v", instanceId, err)
-	} else if capping != nil {
-		result.NewChatCapping = &NewChatCappingStruct{
-			CappingStatus: string(capping.CappingStatus),
-			TotalQuota:    capping.TotalQuota,
-			UsedQuota:     capping.UsedQuota,
-			CycleEnds:     capping.CycleEndTimestamp.Unix(),
-		}
-	}
-
-	return result, nil
+	return &LimitsStruct{}, nil
 }
 
 func (i instances) GetQr(instance *instance_model.Instance) (*QrcodeStruct, error) {

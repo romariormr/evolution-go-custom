@@ -16,7 +16,6 @@ RUN apk update && apk add --no-cache git build-base libjpeg-turbo-dev libwebp-de
 WORKDIR /build
 
 COPY go.mod go.sum ./
-COPY whatsmeow-lib/ ./whatsmeow-lib/
 RUN go mod download
 
 COPY . .
