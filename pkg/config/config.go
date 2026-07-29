@@ -47,6 +47,7 @@ type Config struct {
 	WhatsappVersionMajor int
 	WhatsappVersionMinor int
 	WhatsappVersionPatch int
+	WhatsappPlatform     string
 	ProxyProtocol        string
 	ProxyHost            string
 	ProxyPort            string
@@ -265,6 +266,10 @@ func Load() *Config {
 	whatsappVersionMajor := os.Getenv(config_env.WHATSAPP_VERSION_MAJOR)
 	whatsappVersionMinor := os.Getenv(config_env.WHATSAPP_VERSION_MINOR)
 	whatsappVersionPatch := os.Getenv(config_env.WHATSAPP_VERSION_PATCH)
+	whatsappPlatform := os.Getenv(config_env.WHATSAPP_PLATFORM)
+	if whatsappPlatform == "" {
+		whatsappPlatform = "desktop"
+	}
 
 	proxyProtocol := os.Getenv(config_env.PROXY_PROTOCOL)
 	proxyHost := os.Getenv(config_env.PROXY_HOST)
@@ -367,6 +372,7 @@ func Load() *Config {
 		WhatsappVersionMajor: major,
 		WhatsappVersionMinor: minor,
 		WhatsappVersionPatch: patch,
+		WhatsappPlatform:     whatsappPlatform,
 		ProxyProtocol:        proxyProtocol,
 		ProxyHost:            proxyHost,
 		ProxyPort:            proxyPort,

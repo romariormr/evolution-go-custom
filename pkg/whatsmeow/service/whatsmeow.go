@@ -342,7 +342,16 @@ func (w whatsmeowService) StartClient(cd *ClientData) {
 
 	var version clientVersion
 
-	platformID, ok := waCompanionReg.DeviceProps_PlatformType_value[strings.ToUpper("chrome")]
+	// WhatsApp passou a rejeitar conexoes anunciando plataforma WEB/CHROME com
+	// "Client outdated (405)" mesmo com a versao correta (issue conhecida da
+	// comunidade whatsmeow, ~jun/2026) -- servidor parece marcar esse platform
+	// type especificamente, nao a versao em si. Default DESKTOP (nao-browser);
+	// configuravel via WHATSAPP_PLATFORM se precisar trocar de novo no futuro.
+	platformName := w.config.WhatsappPlatform
+	if platformName == "" {
+		platformName = "desktop"
+	}
+	platformID, ok := waCompanionReg.DeviceProps_PlatformType_value[strings.ToUpper(platformName)]
 	if ok {
 		store.DeviceProps.PlatformType = waCompanionReg.DeviceProps_PlatformType(platformID).Enum()
 	}
