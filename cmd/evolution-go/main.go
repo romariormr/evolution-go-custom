@@ -367,15 +367,25 @@ func main() {
 
 	logger.LogInfo("Starting Evolution GO version %s", version)
 
-	// Busca a versao atual do WhatsApp Web na inicializacao. Sem isso o client roda
-	// sempre com a versao hardcoded do whatsmeow-lib (congelada desde o vendor), e o
-	// WhatsApp degrada silenciosamente acoes sensiveis (ex.: criar grupo trava sem erro)
-	// pra clients com fingerprint de versao antiga, mesmo com mensageria funcionando normal.
-	if latestVer, err := whatsmeow.GetLatestVersion(context.Background(), nil); err != nil {
+	// Define a versao global do WhatsApp Web usada no handshake da conexao (store.waVersion).
+	// Isso e separado do store.DeviceProps.Version setado por instancia em whatsmeow.go -- os
+	// dois precisam bater com uma versao real, senao o WhatsApp rejeita com "Client outdated (405)"
+	// mesmo com o DeviceProps correto. Prioriza WHATSAPP_VERSION_MAJOR/MINOR/PATCH (mesma fonte
+	// de verdade do path por instancia); só tenta a raspagem de web.whatsapp.com como fallback,
+	// que na pratica retornou numero incorreto (nao é o client_revision real) e nao deve ser a
+	// fonte principal.
+	if cfg.WhatsappVersionMajor != 0 && cfg.WhatsappVersionMinor != 0 && cfg.WhatsappVersionPatch != 0 {
+		waStore.SetWAVersion(waStore.WAVersionContainer{
+			uint32(cfg.WhatsappVersionMajor),
+			uint32(cfg.WhatsappVersionMinor),
+			uint32(cfg.WhatsappVersionPatch),
+		})
+		logger.LogInfo("Using WhatsApp Web version from config: %d.%d.%d", cfg.WhatsappVersionMajor, cfg.WhatsappVersionMinor, cfg.WhatsappVersionPatch)
+	} else if latestVer, err := whatsmeow.GetLatestVersion(context.Background(), nil); err != nil {
 		logger.LogWarn("Failed to fetch latest WhatsApp Web version, using built-in fallback: %v", err)
 	} else {
 		waStore.SetWAVersion(*latestVer)
-		logger.LogInfo("Using WhatsApp Web version %s", latestVer.String())
+		logger.LogInfo("Using WhatsApp Web version from web fetch: %s", latestVer.String())
 	}
 
 	startTime := time.Now()
