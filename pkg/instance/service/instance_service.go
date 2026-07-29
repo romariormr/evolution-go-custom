@@ -492,10 +492,17 @@ func (i instances) GetQr(instance *instance_model.Instance) (*QrcodeStruct, erro
 	logger := i.loggerWrapper.GetLogger(instance.Id)
 	client := i.clientPointer[instance.Id]
 
-	// Se não há cliente ou o cliente está logado, precisamos iniciar um novo cliente
-	if client == nil || client.IsLoggedIn() {
+	// Se não há cliente, o cliente está logado, ou o cliente existe mas ficou
+	// preso desconectado/deslogado (ex.: sessão derrubada pelo celular), precisamos
+	// (re)iniciar a instância pra gerar um QR code novo. Sem esse terceiro caso, um
+	// client "existe mas nao conectado e nao logado" nunca tinha StartInstance chamado
+	// de novo — o /instance/connect ficava só checando um instance.Qrcode que nunca era
+	// preenchido, retornando erro pra sempre (a instancia parecia "travada").
+	if client == nil || client.IsLoggedIn() || !client.IsConnected() {
 		if client != nil && client.IsLoggedIn() {
 			logger.LogInfo("[%s] Client is logged in, starting new instance for QR code", instance.Id)
+		} else if client != nil {
+			logger.LogInfo("[%s] Client exists but disconnected, restarting instance for a fresh QR code", instance.Id)
 		} else {
 			logger.LogInfo("[%s] No client found, starting new instance for QR code", instance.Id)
 		}
@@ -516,9 +523,6 @@ func (i instances) GetQr(instance *instance_model.Instance) (*QrcodeStruct, erro
 		if client != nil && client.IsLoggedIn() {
 			return nil, fmt.Errorf("session already logged in")
 		}
-	} else if !client.IsConnected() {
-		// Se o cliente existe mas não está conectado, pode estar aguardando QR code
-		logger.LogInfo("[%s] Client exists but not connected, checking for existing QR code", instance.Id)
 	}
 
 	// Buscar instância atualizada do banco para pegar o QR code mais recente
