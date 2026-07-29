@@ -20,8 +20,19 @@ import (
 	"go.mau.fi/whatsmeow/types"
 )
 
+// GroupInfoWithActivity embute o *types.GroupInfo do whatsmeow (oficial, sem os campos
+// LastMessage* que o fork vendorizado antigo adicionava direto na struct) e expõe a
+// mesma enriquecimento de "ultima atividade" vindo do nosso messageRepository por fora,
+// sem precisar tocar na lib.
+type GroupInfoWithActivity struct {
+	*types.GroupInfo
+	LastMessageID     string `json:"lastMessageId,omitempty"`
+	LastMessageAt     string `json:"lastMessageAt,omitempty"`
+	LastMessageStatus string `json:"lastMessageStatus,omitempty"`
+}
+
 type GroupService interface {
-	ListGroups(instance *instance_model.Instance) ([]*types.GroupInfo, error)
+	ListGroups(instance *instance_model.Instance) ([]*GroupInfoWithActivity, error)
 	GetGroupInfo(data *GetGroupInfoStruct, instance *instance_model.Instance) (*types.GroupInfo, error)
 	GetGroupInviteLink(data *GetGroupInviteLinkStruct, instance *instance_model.Instance) (string, error)
 	SetGroupPhoto(data *SetGroupPhotoStruct, instance *instance_model.Instance) (string, error)
@@ -158,7 +169,7 @@ func (g *groupService) ensureClientConnected(instanceId string) (*whatsmeow.Clie
 	return client, nil
 }
 
-func (g *groupService) ListGroups(instance *instance_model.Instance) ([]*types.GroupInfo, error) {
+func (g *groupService) ListGroups(instance *instance_model.Instance) ([]*GroupInfoWithActivity, error) {
 	client, err := g.ensureClientConnected(instance.Id)
 	if err != nil {
 		return nil, err
@@ -170,13 +181,9 @@ func (g *groupService) ListGroups(instance *instance_model.Instance) ([]*types.G
 		return nil, err
 	}
 
-	gc := new(GroupCollection)
+	result := make([]*GroupInfoWithActivity, 0, len(resp))
 	for _, info := range resp {
-		simpleGroup := SimpleGroupInfo{
-			JID:       info.JID,
-			GroupName: info.GroupName.Name,
-		}
-		gc.Groups = append(gc.Groups, simpleGroup)
+		result = append(result, &GroupInfoWithActivity{GroupInfo: info})
 	}
 
 	sources := make([]string, 0, len(resp)*2)
@@ -186,20 +193,20 @@ func (g *groupService) ListGroups(instance *instance_model.Instance) ([]*types.G
 	latest, err := g.messageRepository.GetLatestMessages(sources)
 	if err != nil {
 		g.loggerWrapper.GetLogger(instance.Id).LogWarn("[%s] could not enrich groups with latest message: %v", instance.Id, err)
-		return resp, nil
+		return result, nil
 	}
-	for _, info := range resp {
-		message, ok := latest[info.JID.String()]
+	for _, item := range result {
+		message, ok := latest[item.JID.String()]
 		if !ok {
-			message, ok = latest[info.JID.User]
+			message, ok = latest[item.JID.User]
 		}
 		if ok {
-			info.LastMessageID = message.MessageID
-			info.LastMessageAt = message.Timestamp
-			info.LastMessageStatus = message.Status
+			item.LastMessageID = message.MessageID
+			item.LastMessageAt = message.Timestamp
+			item.LastMessageStatus = message.Status
 		}
 	}
-	return resp, nil
+	return result, nil
 }
 
 func (g *groupService) GetGroupInfo(data *GetGroupInfoStruct, instance *instance_model.Instance) (*types.GroupInfo, error) {
