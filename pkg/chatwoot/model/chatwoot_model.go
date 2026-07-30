@@ -37,6 +37,11 @@ type ChatwootConfig struct {
 	// não é informado pelo usuário.
 	InboxId string `json:"inboxId" gorm:"default:''"`
 
+	// QrConversationId é a conversa (com o contato sintético "Gerador de QR") usada
+	// pra postar o QR code e os avisos de conexão direto no Chatwoot. Criada sob
+	// demanda na primeira notificação, reaproveitada depois.
+	QrConversationId string `json:"-" gorm:"default:''"`
+
 	CreatedAt time.Time `json:"createdAt" gorm:"autoCreateTime"`
 	UpdatedAt time.Time `json:"updatedAt" gorm:"autoUpdateTime"`
 }

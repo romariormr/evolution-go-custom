@@ -36,7 +36,24 @@ type ChatwootService interface {
 	// erro vem em warning separado pro chamador decidir o que mostrar.
 	SetConfig(instanceId string, input SetConfigStruct) (cfg *chatwoot_model.ChatwootConfig, inboxWarning string, err error)
 	DeleteConfig(instanceId string) error
+
+	// NotifyQrCode posta o QR code recém-gerado na conversa de status da instância no
+	// Chatwoot (cria contato+conversa na primeira vez). No-op silencioso se a
+	// instância não tem Chatwoot habilitado/configurado — chamado a cada QR code
+	// gerado, não pode travar nem logar como erro o caso comum de "não configurado".
+	NotifyQrCode(instanceId string, qrPNG []byte, code string) error
+
+	// NotifyConnected posta um aviso de conexão bem-sucedida na mesma conversa de
+	// status. Mesmo no-op silencioso de NotifyQrCode quando não configurado.
+	NotifyConnected(instanceId string) error
 }
+
+// Contato sintético usado só pra carregar a conversa de status (QR code, conectado)
+// dentro do Chatwoot — não é um contato real do WhatsApp.
+const (
+	statusContactName  = "Gerador de QR"
+	statusContactPhone = "+123456"
+)
 
 type chatwootService struct {
 	repo         chatwoot_repository.ChatwootRepository
@@ -112,4 +129,74 @@ func (s *chatwootService) SetConfig(instanceId string, input SetConfigStruct) (*
 
 func (s *chatwootService) DeleteConfig(instanceId string) error {
 	return s.repo.Delete(instanceId)
+}
+
+// ensureStatusConversation garante que existe a conversa (com o contato sintético)
+// usada pra postar QR/status dessa instância, criando na primeira vez e cacheando
+// o id pras próximas chamadas.
+func (s *chatwootService) ensureStatusConversation(cfg *chatwoot_model.ChatwootConfig) (string, error) {
+	if cfg.QrConversationId != "" {
+		return cfg.QrConversationId, nil
+	}
+
+	contactId, sourceId, err := s.client.FindOrCreateContact(cfg.Url, cfg.AccountId, cfg.Token, cfg.InboxId, statusContactName, statusContactPhone)
+	if err != nil {
+		return "", fmt.Errorf("falha ao criar contato de status no chatwoot: %w", err)
+	}
+
+	conversationId, err := s.client.CreateConversation(cfg.Url, cfg.AccountId, cfg.Token, cfg.InboxId, sourceId, contactId)
+	if err != nil {
+		return "", fmt.Errorf("falha ao criar conversa de status no chatwoot: %w", err)
+	}
+
+	cfg.QrConversationId = conversationId
+	if err := s.repo.Upsert(cfg); err != nil {
+		logger.LogWarn("[%s] conversa de status criada (id=%s) mas falha ao cachear: %v", cfg.InstanceId, conversationId, err)
+	}
+
+	return conversationId, nil
+}
+
+func (s *chatwootService) NotifyQrCode(instanceId string, qrPNG []byte, code string) error {
+	cfg, err := s.repo.GetByInstanceId(instanceId)
+	if err != nil || !cfg.Enabled || cfg.InboxId == "" {
+		return nil
+	}
+
+	conversationId, err := s.ensureStatusConversation(cfg)
+	if err != nil {
+		logger.LogWarn("[%s] chatwoot: %v", instanceId, err)
+		return err
+	}
+
+	if err := s.client.SendImageMessage(cfg.Url, cfg.AccountId, cfg.Token, conversationId, qrPNG, "qrcode.png", "qrgeneratedsuccesfully"); err != nil {
+		logger.LogWarn("[%s] chatwoot: falha ao enviar QR code: %v", instanceId, err)
+		return err
+	}
+
+	if err := s.client.SendTextMessage(cfg.Url, cfg.AccountId, cfg.Token, conversationId, "scanqr"); err != nil {
+		logger.LogWarn("[%s] chatwoot: falha ao enviar aviso 'scanqr': %v", instanceId, err)
+	}
+
+	return nil
+}
+
+func (s *chatwootService) NotifyConnected(instanceId string) error {
+	cfg, err := s.repo.GetByInstanceId(instanceId)
+	if err != nil || !cfg.Enabled || cfg.InboxId == "" {
+		return nil
+	}
+
+	conversationId, err := s.ensureStatusConversation(cfg)
+	if err != nil {
+		logger.LogWarn("[%s] chatwoot: %v", instanceId, err)
+		return err
+	}
+
+	if err := s.client.SendTextMessage(cfg.Url, cfg.AccountId, cfg.Token, conversationId, "cw.inbox.connected"); err != nil {
+		logger.LogWarn("[%s] chatwoot: falha ao enviar aviso de conexão: %v", instanceId, err)
+		return err
+	}
+
+	return nil
 }

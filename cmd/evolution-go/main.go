@@ -170,6 +170,10 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 	messageRepository := message_repository.NewMessageRepository(db)
 	labelRepository := label_repository.NewLabelRepository(db)
 
+	chatwootRepository := chatwoot_repository.NewChatwootRepository(db)
+	chatwootService := chatwoot_service.NewChatwootService(chatwootRepository, instanceRepository)
+	chatwootHandler := chatwoot_handler.NewChatwootHandler(chatwootService)
+
 	whatsmeowService := whatsmeow_service.NewWhatsmeowService(
 		instanceRepository,
 		authDB,
@@ -186,6 +190,7 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 		mediaStorage,
 		natsProducer,
 		loggerWrapper,
+		chatwootService,
 	)
 	instanceService := instance_service.NewInstanceService(
 		instanceRepository,
@@ -204,10 +209,6 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 	communityService := community_service.NewCommunityService(clientPointer, whatsmeowService, loggerWrapper)
 	labelService := label_service.NewLabelService(clientPointer, whatsmeowService, labelRepository, loggerWrapper)
 	newsletterService := newsletter_service.NewNewsletterService(clientPointer, whatsmeowService, loggerWrapper)
-
-	chatwootRepository := chatwoot_repository.NewChatwootRepository(db)
-	chatwootService := chatwoot_service.NewChatwootService(chatwootRepository, instanceRepository)
-	chatwootHandler := chatwoot_handler.NewChatwootHandler(chatwootService)
 
 	// NOVO: PollHandler usando PollService já inicializado no whatsmeowService (evita dupla inicialização)
 	pollHandler := poll_handler.NewPollHandler(whatsmeowService.GetPollService(), loggerWrapper)
