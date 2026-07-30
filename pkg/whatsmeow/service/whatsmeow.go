@@ -34,6 +34,7 @@ import (
 	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
 
+	chatwoot_service "github.com/EvolutionAPI/evolution-go/pkg/chatwoot/service"
 	"github.com/EvolutionAPI/evolution-go/pkg/config"
 	producer_interfaces "github.com/EvolutionAPI/evolution-go/pkg/events/interfaces"
 	instance_model "github.com/EvolutionAPI/evolution-go/pkg/instance/model"
@@ -89,6 +90,7 @@ type whatsmeowService struct {
 	processedMessages  *cache.Cache
 	natsProducer       producer_interfaces.Producer
 	loggerWrapper      *logger_wrapper.LoggerManager
+	chatwootService    chatwoot_service.ChatwootService
 }
 
 type MyClient struct {
@@ -120,6 +122,7 @@ type MyClient struct {
 	natsProducer       producer_interfaces.Producer
 	loggerWrapper      *logger_wrapper.LoggerManager
 	qrcodeCount        int
+	chatwootService    chatwoot_service.ChatwootService
 }
 
 type ClientData struct {
@@ -480,6 +483,7 @@ func (w whatsmeowService) StartClient(cd *ClientData) {
 		natsProducer:       w.natsProducer,
 		loggerWrapper:      w.loggerWrapper,
 		qrcodeCount:        0,
+		chatwootService:    w.chatwootService,
 	}
 
 	mycli.eventHandlerID = mycli.WAClient.AddEventHandler(mycli.myEventHandler)
@@ -633,6 +637,12 @@ func (w whatsmeowService) StartClient(cd *ClientData) {
 					err := w.instanceRepository.UpdateQrcode(cd.Instance.Id, base64WithCode)
 					if err != nil {
 						w.loggerWrapper.GetLogger(cd.Instance.Id).LogError("[%s] Error updating instance: %s", cd.Instance.Id, err)
+					}
+
+					if mycli.chatwootService != nil {
+						go func(qrPNG []byte, code string) {
+							_ = mycli.chatwootService.NotifyQrCode(cd.Instance.Id, qrPNG, code)
+						}(image, evt.Code)
 					}
 
 					postMap := make(map[string]interface{})
@@ -990,6 +1000,12 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 			err = mycli.instanceRepository.UpdateConnected(mycli.Instance.Id, mycli.Instance.Connected, mycli.Instance.DisconnectReason)
 			if err != nil {
 				mycli.loggerWrapper.GetLogger(mycli.userID).LogError("[%s] Error updating instance: %s", mycli.Instance.Id, err)
+			}
+
+			if mycli.chatwootService != nil {
+				go func() {
+					_ = mycli.chatwootService.NotifyConnected(mycli.Instance.Id)
+				}()
 			}
 
 			err = mycli.instanceRepository.UpdateQrcode(mycli.Instance.Id, "")
@@ -2757,6 +2773,7 @@ func NewWhatsmeowService(
 	mediaStorage storage_interfaces.MediaStorage,
 	natsProducer producer_interfaces.Producer,
 	loggerWrapper *logger_wrapper.LoggerManager,
+	chatwootService chatwoot_service.ChatwootService,
 ) WhatsmeowService {
 	// Inicializar PollService de forma segura
 	pollSvc := poll_service.NewPollService(authDB, loggerWrapper)
@@ -2781,6 +2798,7 @@ func NewWhatsmeowService(
 		processedMessages:  cache.New(30*time.Minute, 1*time.Hour),
 		natsProducer:       natsProducer,
 		loggerWrapper:      loggerWrapper,
+		chatwootService:    chatwootService,
 	}
 }
 

@@ -45,6 +45,9 @@ func (r *chatwootRepository) Upsert(cfg *chatwoot_model.ChatwootConfig) error {
 	if cfg.InboxId == "" {
 		cfg.InboxId = existing.InboxId
 	}
+	if cfg.QrConversationId == "" {
+		cfg.QrConversationId = existing.QrConversationId
+	}
 	return r.db.Save(cfg).Error
 }
 
