@@ -25,8 +25,26 @@ const advancedSchema = z.object({
   ignoreStatus: z.boolean().optional(),
 });
 
+const chatwootSchema = z.object({
+  enabled: z.boolean().optional(),
+  url: z.string().url("URL inválida").optional().or(z.literal("")),
+  accountId: z.string().optional(),
+  token: z.string().optional(),
+  signMsg: z.boolean().optional(),
+  nameInbox: z.string().optional(),
+  organization: z.string().optional(),
+  logo: z.string().optional(),
+  conversationPending: z.boolean().optional(),
+  reopenConversation: z.boolean().optional(),
+  importContacts: z.boolean().optional(),
+  importMessages: z.boolean().optional(),
+  daysLimitImportMessages: z.coerce.number().optional(),
+  autoCreate: z.boolean().optional(),
+});
+
 type WebhookFormData = z.infer<typeof webhookSchema>;
 type AdvancedFormData = z.infer<typeof advancedSchema>;
+type ChatwootFormData = z.infer<typeof chatwootSchema>;
 
 const availableEvents = [
   "ALL",
@@ -71,6 +89,18 @@ export default function InstanceSettings() {
   } = useForm<AdvancedFormData>({
     resolver: zodResolver(advancedSchema),
   });
+
+  const {
+    register: registerChatwoot,
+    handleSubmit: handleSubmitChatwoot,
+    formState: { errors: chatwootErrors },
+    reset: resetChatwoot,
+  } = useForm<ChatwootFormData>({
+    resolver: zodResolver(chatwootSchema),
+    defaultValues: { autoCreate: true },
+  });
+  const [chatwootInboxId, setChatwootInboxId] = useState<string | undefined>();
+  const [showChatwootToken, setShowChatwootToken] = useState(false);
 
   // Fetch instance data on mount (only once)
   useEffect(() => {
@@ -128,6 +158,23 @@ export default function InstanceSettings() {
 
     isInitialized.current = true;
   }, [instance, resetWebhook, resetAdvanced]);
+
+  // Load Chatwoot config (separate endpoint, 404 = not configured yet)
+  useEffect(() => {
+    const loadChatwoot = async () => {
+      if (!instance?.id || !instance?.apikey) return;
+      try {
+        const cfg = await instancesApi.getChatwootConfig(instance.id, instance.apikey);
+        if (cfg) {
+          resetChatwoot(cfg);
+          setChatwootInboxId(cfg.inboxId);
+        }
+      } catch (error) {
+        console.error("Erro ao buscar config do Chatwoot:", error);
+      }
+    };
+    loadChatwoot();
+  }, [instance?.id, instance?.apikey, resetChatwoot]);
 
   const toggleEvent = (event: string) => {
     setSelectedEvents((prev) => {
@@ -205,6 +252,51 @@ export default function InstanceSettings() {
         error instanceof Error
           ? error.message
           : "Erro ao atualizar configurações"
+      );
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const onSubmitChatwoot = async (data: ChatwootFormData) => {
+    if (!instance?.apikey || !instance?.id) {
+      toast.error("Token da instância não encontrado");
+      return;
+    }
+
+    try {
+      setIsSaving(true);
+      const { config, warning } = await instancesApi.setChatwootConfig(
+        instance.id,
+        instance.apikey,
+        {
+          enabled: data.enabled || false,
+          url: data.url || "",
+          accountId: data.accountId || "",
+          token: data.token || "",
+          signMsg: data.signMsg || false,
+          nameInbox: data.nameInbox || "",
+          organization: data.organization || "",
+          logo: data.logo || "",
+          conversationPending: data.conversationPending || false,
+          reopenConversation: data.reopenConversation || false,
+          importContacts: data.importContacts || false,
+          importMessages: data.importMessages || false,
+          daysLimitImportMessages: data.daysLimitImportMessages || 0,
+          autoCreate: data.autoCreate ?? true,
+        }
+      );
+
+      setChatwootInboxId(config.inboxId);
+      if (warning) {
+        toast.warning(warning);
+      } else {
+        toast.success("Configurações de Chatwoot atualizadas!");
+      }
+    } catch (error) {
+      console.error("Erro ao atualizar Chatwoot:", error);
+      toast.error(
+        error instanceof Error ? error.message : "Erro ao atualizar Chatwoot"
       );
     } finally {
       setIsSaving(false);
@@ -529,6 +621,191 @@ export default function InstanceSettings() {
                   <Button type="submit" disabled={isSaving} className="gap-2">
                     <Save className="h-4 w-4" />
                     {isSaving ? "Salvando..." : "Salvar Webhook"}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </form>
+
+          {/* Chatwoot Settings Card */}
+          <form onSubmit={handleSubmitChatwoot(onSubmitChatwoot)}>
+            <div className="rounded-lg border border-sidebar-border bg-card p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-semibold text-foreground">
+                  Configurações de Chatwoot
+                </h2>
+                <input
+                  id="chatwootEnabled"
+                  type="checkbox"
+                  {...registerChatwoot("enabled")}
+                  className="rounded border-input w-4 h-4"
+                  title="Habilitar integração com Chatwoot"
+                />
+              </div>
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label
+                      htmlFor="chatwootUrl"
+                      className="block text-sm font-medium text-foreground mb-1"
+                    >
+                      Chatwoot URL
+                    </label>
+                    <input
+                      id="chatwootUrl"
+                      type="url"
+                      placeholder="https://seu-chatwoot.com"
+                      {...registerChatwoot("url")}
+                      className="w-full rounded-md border border-input bg-background px-3 py-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                    />
+                    {chatwootErrors.url && (
+                      <p className="mt-1 text-sm text-destructive">
+                        {chatwootErrors.url.message}
+                      </p>
+                    )}
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="chatwootAccountId"
+                      className="block text-sm font-medium text-foreground mb-1"
+                    >
+                      Account ID
+                    </label>
+                    <input
+                      id="chatwootAccountId"
+                      type="text"
+                      placeholder="1"
+                      {...registerChatwoot("accountId")}
+                      className="w-full rounded-md border border-input bg-background px-3 py-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                    />
+                  </div>
+                  <div className="col-span-2">
+                    <label
+                      htmlFor="chatwootToken"
+                      className="block text-sm font-medium text-foreground mb-1"
+                    >
+                      Token
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        id="chatwootToken"
+                        type={showChatwootToken ? "text" : "password"}
+                        placeholder="Token de acesso da API (api_access_token)"
+                        {...registerChatwoot("token")}
+                        className="w-full rounded-md border border-input bg-background px-3 py-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowChatwootToken(!showChatwootToken)}
+                        className="text-muted-foreground hover:text-foreground transition-colors"
+                      >
+                        {showChatwootToken ? <EyeOff size={18} /> : <Eye size={18} />}
+                      </button>
+                    </div>
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="chatwootNameInbox"
+                      className="block text-sm font-medium text-foreground mb-1"
+                    >
+                      Name Inbox
+                    </label>
+                    <input
+                      id="chatwootNameInbox"
+                      type="text"
+                      placeholder={instance.instanceName}
+                      {...registerChatwoot("nameInbox")}
+                      className="w-full rounded-md border border-input bg-background px-3 py-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                    />
+                    {chatwootInboxId && (
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Inbox criada — id {chatwootInboxId}
+                      </p>
+                    )}
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="chatwootOrganization"
+                      className="block text-sm font-medium text-foreground mb-1"
+                    >
+                      Organization
+                    </label>
+                    <input
+                      id="chatwootOrganization"
+                      type="text"
+                      {...registerChatwoot("organization")}
+                      className="w-full rounded-md border border-input bg-background px-3 py-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                    />
+                  </div>
+                  <div className="col-span-2">
+                    <label
+                      htmlFor="chatwootLogo"
+                      className="block text-sm font-medium text-foreground mb-1"
+                    >
+                      Logo (URL)
+                    </label>
+                    <input
+                      id="chatwootLogo"
+                      type="text"
+                      placeholder="https://.../logo.png"
+                      {...registerChatwoot("logo")}
+                      className="w-full rounded-md border border-input bg-background px-3 py-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4 pt-2">
+                  {(
+                    [
+                      ["signMsg", "Sign Messages", "Assinar mensagens enviadas com o nome do agente"],
+                      ["conversationPending", "Conversation Pending", "Nova conversa entra como pendente"],
+                      ["reopenConversation", "Reopen Conversation", "Reabre conversa resolvida ao chegar mensagem nova"],
+                      ["importContacts", "Import Contacts", "Importa contatos do WhatsApp pro Chatwoot"],
+                      ["importMessages", "Import Messages", "Importa histórico de mensagens ao conectar"],
+                      ["autoCreate", "Auto Create", "Cria a inbox automaticamente no Chatwoot ao salvar"],
+                    ] as const
+                  ).map(([field, label, help]) => (
+                    <div key={field} className="flex items-center justify-between">
+                      <div>
+                        <label
+                          htmlFor={`chatwoot-${field}`}
+                          className="text-sm font-medium text-foreground cursor-pointer"
+                        >
+                          {label}
+                        </label>
+                        <p className="text-xs text-muted-foreground">{help}</p>
+                      </div>
+                      <input
+                        id={`chatwoot-${field}`}
+                        type="checkbox"
+                        {...registerChatwoot(field)}
+                        className="rounded border-input w-4 h-4"
+                      />
+                    </div>
+                  ))}
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="chatwootDaysLimitImportMessages"
+                    className="block text-sm font-medium text-foreground mb-1"
+                  >
+                    Days Limit Import Messages
+                  </label>
+                  <input
+                    id="chatwootDaysLimitImportMessages"
+                    type="number"
+                    min={0}
+                    placeholder="0 = sem importação"
+                    {...registerChatwoot("daysLimitImportMessages")}
+                    className="w-40 rounded-md border border-input bg-background px-3 py-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                  />
+                </div>
+
+                <div className="flex justify-end">
+                  <Button type="submit" disabled={isSaving} className="gap-2">
+                    <Save className="h-4 w-4" />
+                    {isSaving ? "Salvando..." : "Salvar Chatwoot"}
                   </Button>
                 </div>
               </div>
