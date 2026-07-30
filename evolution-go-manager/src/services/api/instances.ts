@@ -357,6 +357,78 @@ export const removeInstanceProxy = async (instanceId: string): Promise<void> => 
   await apiClient.delete(`/instance/proxy/${instanceId}`);
 };
 
+export interface ChatwootConfig {
+  enabled: boolean;
+  url: string;
+  accountId: string;
+  token: string;
+  signMsg: boolean;
+  nameInbox: string;
+  organization: string;
+  logo: string;
+  conversationPending: boolean;
+  reopenConversation: boolean;
+  importContacts: boolean;
+  importMessages: boolean;
+  daysLimitImportMessages: number;
+  autoCreate: boolean;
+  inboxId?: string;
+}
+
+/**
+ * Get Chatwoot config for an instance
+ * GET /instance/chatwoot/:instanceId
+ * Requires instance token in apikey header
+ */
+export const getChatwootConfig = async (
+  instanceId: string,
+  instanceToken: string
+): Promise<ChatwootConfig | null> => {
+  try {
+    const response = await apiClient.get<ChatwootConfig>(
+      `/instance/chatwoot/${instanceId}`,
+      { headers: { apikey: instanceToken } }
+    );
+    return response.data;
+  } catch (error: unknown) {
+    const status = (error as { response?: { status?: number } })?.response?.status;
+    if (status === 404) return null;
+    throw error;
+  }
+};
+
+/**
+ * Create/update Chatwoot config for an instance
+ * POST /instance/chatwoot/:instanceId
+ * Requires instance token in apikey header
+ */
+export const setChatwootConfig = async (
+  instanceId: string,
+  instanceToken: string,
+  config: ChatwootConfig
+): Promise<{ config: ChatwootConfig; warning?: string }> => {
+  const response = await apiClient.post<{ config: ChatwootConfig; warning?: string }>(
+    `/instance/chatwoot/${instanceId}`,
+    config,
+    { headers: { apikey: instanceToken } }
+  );
+  return response.data;
+};
+
+/**
+ * Remove Chatwoot config for an instance (disables the integration)
+ * DELETE /instance/chatwoot/:instanceId
+ * Requires instance token in apikey header
+ */
+export const deleteChatwootConfig = async (
+  instanceId: string,
+  instanceToken: string
+): Promise<void> => {
+  await apiClient.delete(`/instance/chatwoot/${instanceId}`, {
+    headers: { apikey: instanceToken },
+  });
+};
+
 /**
  * Send a text message
  * POST /send/text
@@ -438,6 +510,9 @@ export default {
   pairInstance,
   getAdvancedSettings,
   updateAdvancedSettings,
+  getChatwootConfig,
+  setChatwootConfig,
+  deleteChatwootConfig,
   getQrCode,
   getConnectionState,
   logoutInstance,
