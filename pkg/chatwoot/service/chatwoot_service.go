@@ -185,6 +185,7 @@ func (s *chatwootService) NotifyQrCode(instanceId string, qrPNG []byte, code str
 		logger.LogWarn("[%s] chatwoot: falha ao enviar aviso 'scanqr': %v", instanceId, err)
 	}
 
+	logger.LogInfo("[%s] chatwoot: QR code postado na conversa de status (conversation=%s)", instanceId, conversationId)
 	return nil
 }
 
@@ -205,5 +206,6 @@ func (s *chatwootService) NotifyConnected(instanceId string) error {
 		return err
 	}
 
+	logger.LogInfo("[%s] chatwoot: aviso de conexão postado na conversa de status (conversation=%s)", instanceId, conversationId)
 	return nil
 }

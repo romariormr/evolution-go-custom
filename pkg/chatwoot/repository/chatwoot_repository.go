@@ -42,6 +42,10 @@ func (r *chatwootRepository) Upsert(cfg *chatwoot_model.ChatwootConfig) error {
 	}
 
 	cfg.Id = existing.Id
+	// autoCreateTime só se aplica no INSERT — Save() reescreve TODAS as colunas,
+	// entao sem isso um cfg construido do zero (SetConfig nao seta CreatedAt) zera
+	// a data de criacao original a cada update.
+	cfg.CreatedAt = existing.CreatedAt
 	if cfg.InboxId == "" {
 		cfg.InboxId = existing.InboxId
 	}
