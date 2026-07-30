@@ -53,11 +53,13 @@ type ChatwootService interface {
 const statusContactName = "Gerador de QR"
 
 // statusContactPhone precisa ser único por CONTA no Chatwoot (ele rejeita
-// phone_number duplicado) — se duas instâncias apontarem pra mesma conta, cada
-// uma precisa do seu próprio número sintético. Deriva do inboxId (que já é
-// único dentro da conta) em vez de um valor fixo.
+// phone_number duplicado) e válido em E.164 (rejeita "+00073", por exemplo,
+// com "Phone number should be in e164 format") — se duas instâncias
+// apontarem pra mesma conta, cada uma precisa do seu próprio número
+// sintético. Deriva do inboxId (que já é único dentro da conta) prefixado
+// com um DDI+DDD plausível em vez de um valor fixo.
 func statusContactPhone(inboxId string) string {
-	return fmt.Sprintf("+000%s", inboxId)
+	return fmt.Sprintf("+1555%s", inboxId)
 }
 
 type chatwootService struct {
