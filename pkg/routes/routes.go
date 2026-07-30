@@ -10,6 +10,7 @@ import (
 	_ "github.com/EvolutionAPI/evolution-go/docs"
 	call_handler "github.com/EvolutionAPI/evolution-go/pkg/call/handler"
 	chat_handler "github.com/EvolutionAPI/evolution-go/pkg/chat/handler"
+	chatwoot_handler "github.com/EvolutionAPI/evolution-go/pkg/chatwoot/handler"
 	community_handler "github.com/EvolutionAPI/evolution-go/pkg/community/handler"
 	group_handler "github.com/EvolutionAPI/evolution-go/pkg/group/handler"
 	instance_handler "github.com/EvolutionAPI/evolution-go/pkg/instance/handler"
@@ -38,6 +39,7 @@ type Routes struct {
 	newsletterHandler       newsletter_handler.NewsletterHandler
 	pollHandler             *poll_handler.PollHandler
 	serverHandler           server_handler.ServerHandler
+	chatwootHandler         chatwoot_handler.ChatwootHandler
 }
 
 func (r *Routes) AssignRoutes(eng *gin.Engine) {
@@ -109,6 +111,9 @@ func (r *Routes) AssignRoutes(eng *gin.Engine) {
 			routes.GET("/webhooks/:instanceId", r.instanceHandler.ListWebhooks)
 			routes.POST("/webhooks/:instanceId", r.instanceHandler.AddWebhook)
 			routes.DELETE("/webhooks/:instanceId", r.instanceHandler.RemoveWebhook)
+			routes.GET("/chatwoot/:instanceId", r.chatwootHandler.GetConfig)
+			routes.POST("/chatwoot/:instanceId", r.chatwootHandler.SetConfig)
+			routes.DELETE("/chatwoot/:instanceId", r.chatwootHandler.DeleteConfig)
 		}
 	}
 
@@ -263,6 +268,7 @@ func NewRouter(
 	newsletterHandler newsletter_handler.NewsletterHandler,
 	pollHandler *poll_handler.PollHandler,
 	serverHandler server_handler.ServerHandler,
+	chatwootHandler chatwoot_handler.ChatwootHandler,
 ) *Routes {
 	return &Routes{
 		authMiddleware:          authMiddleware,
@@ -279,5 +285,6 @@ func NewRouter(
 		newsletterHandler:       newsletterHandler,
 		pollHandler:             pollHandler,
 		serverHandler:           serverHandler,
+		chatwootHandler:         chatwootHandler,
 	}
 }

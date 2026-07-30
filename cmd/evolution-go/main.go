@@ -30,6 +30,10 @@ import (
 	call_service "github.com/EvolutionAPI/evolution-go/pkg/call/service"
 	chat_handler "github.com/EvolutionAPI/evolution-go/pkg/chat/handler"
 	chat_service "github.com/EvolutionAPI/evolution-go/pkg/chat/service"
+	chatwoot_handler "github.com/EvolutionAPI/evolution-go/pkg/chatwoot/handler"
+	chatwoot_model "github.com/EvolutionAPI/evolution-go/pkg/chatwoot/model"
+	chatwoot_repository "github.com/EvolutionAPI/evolution-go/pkg/chatwoot/repository"
+	chatwoot_service "github.com/EvolutionAPI/evolution-go/pkg/chatwoot/service"
 	community_handler "github.com/EvolutionAPI/evolution-go/pkg/community/handler"
 	community_service "github.com/EvolutionAPI/evolution-go/pkg/community/service"
 	config "github.com/EvolutionAPI/evolution-go/pkg/config"
@@ -201,6 +205,10 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 	labelService := label_service.NewLabelService(clientPointer, whatsmeowService, labelRepository, loggerWrapper)
 	newsletterService := newsletter_service.NewNewsletterService(clientPointer, whatsmeowService, loggerWrapper)
 
+	chatwootRepository := chatwoot_repository.NewChatwootRepository(db)
+	chatwootService := chatwoot_service.NewChatwootService(chatwootRepository, instanceRepository)
+	chatwootHandler := chatwoot_handler.NewChatwootHandler(chatwootService)
+
 	// NOVO: PollHandler usando PollService já inicializado no whatsmeowService (evita dupla inicialização)
 	pollHandler := poll_handler.NewPollHandler(whatsmeowService.GetPollService(), loggerWrapper)
 
@@ -239,6 +247,7 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 		newsletter_handler.NewNewsletterHandler(newsletterService),
 		pollHandler,
 		server_handler.NewServerHandler(),
+		chatwootHandler,
 	).AssignRoutes(r)
 
 	// Controle de acesso (usuários/grupos) — rotas /access/*
@@ -287,6 +296,7 @@ func migrate(db *gorm.DB) {
 		&access_model.AccessUserGroup{},
 		&access_model.AccessGroupInstance{},
 		&access_model.AccessSetting{},
+		&chatwoot_model.ChatwootConfig{},
 	)
 
 	if err != nil {
