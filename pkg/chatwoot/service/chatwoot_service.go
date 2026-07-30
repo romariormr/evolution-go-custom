@@ -50,10 +50,15 @@ type ChatwootService interface {
 
 // Contato sintético usado só pra carregar a conversa de status (QR code, conectado)
 // dentro do Chatwoot — não é um contato real do WhatsApp.
-const (
-	statusContactName  = "Gerador de QR"
-	statusContactPhone = "+123456"
-)
+const statusContactName = "Gerador de QR"
+
+// statusContactPhone precisa ser único por CONTA no Chatwoot (ele rejeita
+// phone_number duplicado) — se duas instâncias apontarem pra mesma conta, cada
+// uma precisa do seu próprio número sintético. Deriva do inboxId (que já é
+// único dentro da conta) em vez de um valor fixo.
+func statusContactPhone(inboxId string) string {
+	return fmt.Sprintf("+000%s", inboxId)
+}
 
 type chatwootService struct {
 	repo         chatwoot_repository.ChatwootRepository
@@ -139,7 +144,7 @@ func (s *chatwootService) ensureStatusConversation(cfg *chatwoot_model.ChatwootC
 		return cfg.QrConversationId, nil
 	}
 
-	contactId, sourceId, err := s.client.FindOrCreateContact(cfg.Url, cfg.AccountId, cfg.Token, cfg.InboxId, statusContactName, statusContactPhone)
+	contactId, sourceId, err := s.client.FindOrCreateContact(cfg.Url, cfg.AccountId, cfg.Token, cfg.InboxId, statusContactName, statusContactPhone(cfg.InboxId))
 	if err != nil {
 		return "", fmt.Errorf("falha ao criar contato de status no chatwoot: %w", err)
 	}
