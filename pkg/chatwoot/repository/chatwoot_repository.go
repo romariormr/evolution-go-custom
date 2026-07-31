@@ -11,6 +11,11 @@ type ChatwootRepository interface {
 	GetByInstanceId(instanceId string) (*chatwoot_model.ChatwootConfig, error)
 	Upsert(cfg *chatwoot_model.ChatwootConfig) error
 	Delete(instanceId string) error
+	// ClearQrConversation esquece a conversa de status cacheada, sem mexer no
+	// resto da config (InboxId, credenciais etc) — usado quando a conversa
+	// cacheada ficou errada (ex.: casou com um contato real por engano) e
+	// precisa ser recriada do zero na próxima notificação.
+	ClearQrConversation(instanceId string) error
 }
 
 type chatwootRepository struct {
@@ -57,4 +62,8 @@ func (r *chatwootRepository) Upsert(cfg *chatwoot_model.ChatwootConfig) error {
 
 func (r *chatwootRepository) Delete(instanceId string) error {
 	return r.db.Where("instance_id = ?", instanceId).Delete(&chatwoot_model.ChatwootConfig{}).Error
+}
+
+func (r *chatwootRepository) ClearQrConversation(instanceId string) error {
+	return r.db.Model(&chatwoot_model.ChatwootConfig{}).Where("instance_id = ?", instanceId).Update("qr_conversation_id", "").Error
 }

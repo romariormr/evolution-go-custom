@@ -114,6 +114,7 @@ func (r *Routes) AssignRoutes(eng *gin.Engine) {
 			routes.GET("/chatwoot/:instanceId", r.chatwootHandler.GetConfig)
 			routes.POST("/chatwoot/:instanceId", r.chatwootHandler.SetConfig)
 			routes.DELETE("/chatwoot/:instanceId", r.chatwootHandler.DeleteConfig)
+			routes.POST("/chatwoot/:instanceId/reset-status", r.chatwootHandler.ResetStatusConversation)
 		}
 	}
 

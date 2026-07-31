@@ -46,6 +46,12 @@ type ChatwootService interface {
 	// NotifyConnected posta um aviso de conexão bem-sucedida na mesma conversa de
 	// status. Mesmo no-op silencioso de NotifyQrCode quando não configurado.
 	NotifyConnected(instanceId string) error
+
+	// ResetStatusConversation esquece a conversa de status cacheada (QrConversationId)
+	// pra essa instância, sem mexer no resto da config. Próxima notificação cria
+	// uma conversa nova do zero. Usar quando a conversa cacheada ficou associada
+	// ao contato errado (ver ClearQrConversation).
+	ResetStatusConversation(instanceId string) error
 }
 
 // Contato sintético usado só pra carregar a conversa de status (QR code, conectado)
@@ -136,6 +142,10 @@ func (s *chatwootService) SetConfig(instanceId string, input SetConfigStruct) (*
 
 func (s *chatwootService) DeleteConfig(instanceId string) error {
 	return s.repo.Delete(instanceId)
+}
+
+func (s *chatwootService) ResetStatusConversation(instanceId string) error {
+	return s.repo.ClearQrConversation(instanceId)
 }
 
 // ensureStatusConversation garante que existe a conversa (com o contato sintético)

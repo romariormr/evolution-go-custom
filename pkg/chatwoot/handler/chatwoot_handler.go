@@ -13,6 +13,7 @@ type ChatwootHandler interface {
 	GetConfig(ctx *gin.Context)
 	SetConfig(ctx *gin.Context)
 	DeleteConfig(ctx *gin.Context)
+	ResetStatusConversation(ctx *gin.Context)
 }
 
 type chatwootHandler struct {
@@ -107,4 +108,28 @@ func (h *chatwootHandler) DeleteConfig(ctx *gin.Context) {
 	}
 
 	ctx.JSON(http.StatusOK, gin.H{"message": "chatwoot config removed"})
+}
+
+// ResetStatusConversation esquece a conversa de status cacheada (QR code / aviso de
+// conexão) dessa instância, sem mexer no resto da config — usar se ela ficou
+// associada ao contato errado no Chatwoot. Próxima notificação cria uma nova.
+// @Summary Reseta a conversa de status (QR/conexão) de uma instância
+// @Tags Chatwoot
+// @Produce json
+// @Param instanceId path string true "Instance ID"
+// @Success 200 {object} gin.H
+// @Router /instance/chatwoot/{instanceId}/reset-status [post]
+func (h *chatwootHandler) ResetStatusConversation(ctx *gin.Context) {
+	instanceId := ctx.Param("instanceId")
+	if instanceId == "" {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "instanceId is required"})
+		return
+	}
+
+	if err := h.service.ResetStatusConversation(instanceId); err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	ctx.JSON(http.StatusOK, gin.H{"message": "status conversation reset"})
 }

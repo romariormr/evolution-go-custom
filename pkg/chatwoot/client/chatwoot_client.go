@@ -125,7 +125,7 @@ func (c *Client) FindOrCreateContact(baseURL, accountId, token, inboxId, name, p
 	if err != nil {
 		// Contato com esse identifier/telefone já pode existir nessa conta —
 		// tenta localizar via busca antes de desistir.
-		return c.searchContact(baseURL, accountId, token, phoneNumber)
+		return c.searchContact(baseURL, accountId, token, phoneNumber, inboxId)
 	}
 
 	var parsed struct {
@@ -145,7 +145,7 @@ func (c *Client) FindOrCreateContact(baseURL, accountId, token, inboxId, name, p
 	return fmt.Sprintf("%d", parsed.Payload.Contact.Id), parsed.Payload.ContactInbox.SourceId, nil
 }
 
-func (c *Client) searchContact(baseURL, accountId, token, phoneNumber string) (contactId string, sourceId string, err error) {
+func (c *Client) searchContact(baseURL, accountId, token, phoneNumber, inboxId string) (contactId string, sourceId string, err error) {
 	url := fmt.Sprintf("%s/api/v1/accounts/%s/contacts/search?q=%s", strings.TrimRight(baseURL, "/"), accountId, phoneNumber)
 
 	req, reqErr := http.NewRequest(http.MethodGet, url, nil)
@@ -170,25 +170,37 @@ func (c *Client) searchContact(baseURL, accountId, token, phoneNumber string) (c
 
 	var parsed struct {
 		Payload []struct {
-			Id             int `json:"id"`
+			Id             int    `json:"id"`
+			PhoneNumber    string `json:"phone_number"`
 			ContactInboxes []struct {
 				SourceId string `json:"source_id"`
+				Inbox    struct {
+					Id int `json:"id"`
+				} `json:"inbox"`
 			} `json:"contact_inboxes"`
 		} `json:"payload"`
 	}
 	if err := json.Unmarshal(respBody, &parsed); err != nil {
 		return "", "", fmt.Errorf("resposta inesperada do chatwoot ao buscar contato: %w", err)
 	}
-	if len(parsed.Payload) == 0 {
-		return "", "", fmt.Errorf("contato %s não encontrado no chatwoot após falha ao criar", phoneNumber)
+
+	// A busca do chatwoot é fuzzy (por nome/email/telefone parcial) — sem checar o
+	// telefone exato aqui, um resultado qualquer do texto pesquisado podia ser aceito
+	// como se fosse o contato certo (já aconteceu: query malformada casou com um
+	// contato real completamente sem relação, e as mensagens de status foram parar
+	// na conversa dele).
+	for _, found := range parsed.Payload {
+		if found.PhoneNumber != phoneNumber {
+			continue
+		}
+		for _, ci := range found.ContactInboxes {
+			if fmt.Sprintf("%d", ci.Inbox.Id) == inboxId {
+				return fmt.Sprintf("%d", found.Id), ci.SourceId, nil
+			}
+		}
 	}
 
-	found := parsed.Payload[0]
-	src := ""
-	if len(found.ContactInboxes) > 0 {
-		src = found.ContactInboxes[0].SourceId
-	}
-	return fmt.Sprintf("%d", found.Id), src, nil
+	return "", "", fmt.Errorf("contato %s (inbox %s) não encontrado no chatwoot após falha ao criar", phoneNumber, inboxId)
 }
 
 // CreateConversation abre uma conversa nova pro contato dentro da inbox.
