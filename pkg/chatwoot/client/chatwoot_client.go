@@ -29,7 +29,7 @@ func NewClient() *Client {
 func (c *Client) CreateInbox(baseURL, accountId, token, inboxName string) (string, error) {
 	url := fmt.Sprintf("%s/api/v1/accounts/%s/inboxes", strings.TrimRight(baseURL, "/"), accountId)
 
-	body, err := json.Marshal(map[string]any{
+	respBody, err := c.doJSON(http.MethodPost, url, token, map[string]any{
 		"name": inboxName,
 		"channel": map[string]any{
 			"type": "api",
@@ -37,28 +37,6 @@ func (c *Client) CreateInbox(baseURL, accountId, token, inboxName string) (strin
 	})
 	if err != nil {
 		return "", err
-	}
-
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("api_access_token", token)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("chatwoot retornou %d ao criar inbox: %s", resp.StatusCode, string(respBody))
 	}
 
 	var parsed struct {
@@ -71,39 +49,70 @@ func (c *Client) CreateInbox(baseURL, accountId, token, inboxName string) (strin
 	return fmt.Sprintf("%d", parsed.Id), nil
 }
 
+// retryDelays define o backoff entre tentativas — falha de rede/instabilidade
+// pontual do Chatwoot não pode virar mensagem perdida silenciosamente.
+var retryDelays = []time.Duration{500 * time.Millisecond, 2 * time.Second}
+
+// isRetryableStatus decide se vale tentar de novo: falha de rede (sem status)
+// e 5xx são transitórios; 4xx é erro de validação real (ex.: telefone
+// inválido) — repetir não muda o resultado.
+func isRetryableStatus(statusCode int) bool {
+	return statusCode == 0 || statusCode >= 500
+}
+
 func (c *Client) doJSON(method, url, token string, body map[string]any) ([]byte, error) {
-	var reader io.Reader
+	var encoded []byte
 	if body != nil {
-		encoded, err := json.Marshal(body)
+		var err error
+		encoded, err = json.Marshal(body)
 		if err != nil {
 			return nil, err
 		}
-		reader = bytes.NewReader(encoded)
 	}
 
-	req, err := http.NewRequest(method, url, reader)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("api_access_token", token)
+	var lastErr error
+	for attempt := 0; attempt <= len(retryDelays); attempt++ {
+		if attempt > 0 {
+			time.Sleep(retryDelays[attempt-1])
+		}
 
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
+		var reader io.Reader
+		if encoded != nil {
+			reader = bytes.NewReader(encoded)
+		}
 
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
+		req, err := http.NewRequest(method, url, reader)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("api_access_token", token)
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		respBody, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if readErr != nil {
+			lastErr = readErr
+			continue
+		}
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			lastErr = fmt.Errorf("chatwoot retornou %d: %s", resp.StatusCode, string(respBody))
+			if !isRetryableStatus(resp.StatusCode) {
+				return nil, lastErr
+			}
+			continue
+		}
+
+		return respBody, nil
 	}
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("chatwoot retornou %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	return respBody, nil
+	return nil, fmt.Errorf("falha após %d tentativas: %w", len(retryDelays)+1, lastErr)
 }
 
 // FindOrCreateContact garante que existe um contato com esse telefone vinculado à inbox
@@ -250,51 +259,77 @@ func (c *Client) SendTextMessage(baseURL, accountId, token, conversationId, cont
 	return err
 }
 
-// SendImageMessage posta uma imagem (o QR code) como anexo numa conversa existente.
-func (c *Client) SendImageMessage(baseURL, accountId, token, conversationId string, imageBytes []byte, filename, caption string) error {
+// SendMediaMessage posta um arquivo (imagem, áudio, vídeo, documento) como anexo
+// numa conversa existente, com legenda opcional. messageType é "incoming"
+// (mídia real vinda do WhatsApp) ou "outgoing" (QR code, avisos de sistema).
+func (c *Client) SendMediaMessage(baseURL, accountId, token, conversationId string, mediaBytes []byte, filename, caption, messageType string) error {
 	url := fmt.Sprintf("%s/api/v1/accounts/%s/conversations/%s/messages", strings.TrimRight(baseURL, "/"), accountId, conversationId)
 
-	var buf bytes.Buffer
-	writer := multipart.NewWriter(&buf)
+	buildRequest := func() (*http.Request, error) {
+		var buf bytes.Buffer
+		writer := multipart.NewWriter(&buf)
 
-	if err := writer.WriteField("content", caption); err != nil {
-		return err
-	}
-	if err := writer.WriteField("message_type", "outgoing"); err != nil {
-		return err
-	}
+		if err := writer.WriteField("content", caption); err != nil {
+			return nil, err
+		}
+		if err := writer.WriteField("message_type", messageType); err != nil {
+			return nil, err
+		}
 
-	part, err := writer.CreateFormFile("attachments[]", filename)
-	if err != nil {
-		return err
-	}
-	if _, err := part.Write(imageBytes); err != nil {
-		return err
-	}
-	if err := writer.Close(); err != nil {
-		return err
-	}
+		part, err := writer.CreateFormFile("attachments[]", filename)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := part.Write(mediaBytes); err != nil {
+			return nil, err
+		}
+		if err := writer.Close(); err != nil {
+			return nil, err
+		}
 
-	req, err := http.NewRequest(http.MethodPost, url, &buf)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-	req.Header.Set("api_access_token", token)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("chatwoot retornou %d ao enviar imagem: %s", resp.StatusCode, string(respBody))
+		req, err := http.NewRequest(http.MethodPost, url, &buf)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", writer.FormDataContentType())
+		req.Header.Set("api_access_token", token)
+		return req, nil
 	}
 
-	return nil
+	var lastErr error
+	for attempt := 0; attempt <= len(retryDelays); attempt++ {
+		if attempt > 0 {
+			time.Sleep(retryDelays[attempt-1])
+		}
+
+		req, err := buildRequest()
+		if err != nil {
+			return err
+		}
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		respBody, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if readErr != nil {
+			lastErr = readErr
+			continue
+		}
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			lastErr = fmt.Errorf("chatwoot retornou %d ao enviar mídia: %s", resp.StatusCode, string(respBody))
+			if !isRetryableStatus(resp.StatusCode) {
+				return lastErr
+			}
+			continue
+		}
+
+		return nil
+	}
+
+	return fmt.Errorf("falha após %d tentativas: %w", len(retryDelays)+1, lastErr)
 }

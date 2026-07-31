@@ -90,6 +90,16 @@ func (a chatwootMessageSenderAdapter) SendText(number, text string, instance *in
 	return err
 }
 
+func (a chatwootMessageSenderAdapter) SendMedia(number string, data []byte, mediaType, filename, caption string, instance *instance_model.Instance) error {
+	_, err := a.sendService.SendMediaFile(&send_service.MediaStruct{
+		Number:   number,
+		Type:     mediaType,
+		Caption:  caption,
+		Filename: filename,
+	}, data, instance)
+	return err
+}
+
 func init() {
 	// ldflags -X main.version= sets this at compile time.
 	// If not set (or still default), try reading from VERSION file.

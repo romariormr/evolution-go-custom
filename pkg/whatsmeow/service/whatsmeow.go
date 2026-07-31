@@ -1540,6 +1540,40 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 					}
 				}
 
+				if err == nil && len(data) > 0 && mycli.chatwootService != nil && !evt.Info.IsFromMe && !evt.Info.IsGroup {
+					chatwootMediaType := ""
+					caption := ""
+					filename := evt.Info.ID + extension
+					switch {
+					case img != nil:
+						chatwootMediaType = "image"
+						caption = img.GetCaption()
+					case video != nil:
+						chatwootMediaType = "video"
+						caption = video.GetCaption()
+					case audio != nil:
+						chatwootMediaType = "audio"
+					case document != nil:
+						chatwootMediaType = "document"
+						caption = document.GetCaption()
+						if document.GetFileName() != "" {
+							filename = document.GetFileName()
+						}
+					case sticker != nil:
+						chatwootMediaType = "image"
+					}
+
+					if chatwootMediaType != "" {
+						jid := evt.Info.Chat.String()
+						pushName := evt.Info.PushName
+						mediaBytes := data
+						mediaMime := mimeType
+						go func() {
+							_ = mycli.chatwootService.NotifyIncomingMedia(mycli.Instance.Id, jid, pushName, mediaBytes, mediaMime, filename, caption)
+						}()
+					}
+				}
+
 				messageMap, ok := dataMap["Message"].(map[string]interface{})
 				if !ok {
 					messageMap = make(map[string]interface{})
