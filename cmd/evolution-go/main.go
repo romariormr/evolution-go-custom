@@ -171,7 +171,8 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 	labelRepository := label_repository.NewLabelRepository(db)
 
 	chatwootRepository := chatwoot_repository.NewChatwootRepository(db)
-	chatwootService := chatwoot_service.NewChatwootService(chatwootRepository, instanceRepository)
+	chatwootContactMapRepository := chatwoot_repository.NewChatwootContactMapRepository(db)
+	chatwootService := chatwoot_service.NewChatwootService(chatwootRepository, chatwootContactMapRepository, instanceRepository)
 	chatwootHandler := chatwoot_handler.NewChatwootHandler(chatwootService)
 
 	whatsmeowService := whatsmeow_service.NewWhatsmeowService(
@@ -298,6 +299,7 @@ func migrate(db *gorm.DB) {
 		&access_model.AccessGroupInstance{},
 		&access_model.AccessSetting{},
 		&chatwoot_model.ChatwootConfig{},
+		&chatwoot_model.ChatwootContactMap{},
 	)
 
 	if err != nil {

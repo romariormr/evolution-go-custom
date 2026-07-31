@@ -2,6 +2,8 @@ package chatwoot_service
 
 import (
 	"fmt"
+	"strings"
+	"sync"
 
 	chatwoot_client "github.com/EvolutionAPI/evolution-go/pkg/chatwoot/client"
 	chatwoot_model "github.com/EvolutionAPI/evolution-go/pkg/chatwoot/model"
@@ -52,6 +54,11 @@ type ChatwootService interface {
 	// uma conversa nova do zero. Usar quando a conversa cacheada ficou associada
 	// ao contato errado (ver ClearQrConversation).
 	ResetStatusConversation(instanceId string) error
+
+	// NotifyIncomingMessage repassa uma mensagem de texto recebida no WhatsApp pro
+	// Chatwoot, criando contato/conversa do contato real (por JID) se ainda não
+	// existir. No-op silencioso se a instância não tem Chatwoot habilitado.
+	NotifyIncomingMessage(instanceId, jid, senderName, text string) error
 }
 
 // Contato sintético usado só pra carregar a conversa de status (QR code, conectado)
@@ -69,17 +76,34 @@ func statusContactPhone(inboxId string) string {
 }
 
 type chatwootService struct {
-	repo         chatwoot_repository.ChatwootRepository
-	instanceRepo instance_repository.InstanceRepository
-	client       *chatwoot_client.Client
+	repo           chatwoot_repository.ChatwootRepository
+	contactMapRepo chatwoot_repository.ChatwootContactMapRepository
+	instanceRepo   instance_repository.InstanceRepository
+	client         *chatwoot_client.Client
+
+	// contactLocks serializa find-or-create por (instanceId, jid) — sem isso,
+	// duas mensagens quase simultâneas do mesmo contato podem criar dois
+	// contatos/conversas duplicados no Chatwoot (bug real que o evolution-api
+	// original já teve que corrigir: "Chatwoot contact duplication during
+	// import"). Chave = instanceId+"|"+jid, valor = *sync.Mutex.
+	contactLocks sync.Map
 }
 
-func NewChatwootService(repo chatwoot_repository.ChatwootRepository, instanceRepo instance_repository.InstanceRepository) ChatwootService {
+func NewChatwootService(repo chatwoot_repository.ChatwootRepository, contactMapRepo chatwoot_repository.ChatwootContactMapRepository, instanceRepo instance_repository.InstanceRepository) ChatwootService {
 	return &chatwootService{
-		repo:         repo,
-		instanceRepo: instanceRepo,
-		client:       chatwoot_client.NewClient(),
+		repo:           repo,
+		contactMapRepo: contactMapRepo,
+		instanceRepo:   instanceRepo,
+		client:         chatwoot_client.NewClient(),
 	}
+}
+
+func (s *chatwootService) lockContact(instanceId, jid string) func() {
+	key := instanceId + "|" + jid
+	value, _ := s.contactLocks.LoadOrStore(key, &sync.Mutex{})
+	mu := value.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
 }
 
 func (s *chatwootService) GetConfig(instanceId string) (*chatwoot_model.ChatwootConfig, error) {
@@ -156,7 +180,7 @@ func (s *chatwootService) ensureStatusConversation(cfg *chatwoot_model.ChatwootC
 		return cfg.QrConversationId, nil
 	}
 
-	contactId, sourceId, err := s.client.FindOrCreateContact(cfg.Url, cfg.AccountId, cfg.Token, cfg.InboxId, statusContactName, statusContactPhone(cfg.InboxId))
+	contactId, sourceId, err := s.client.FindOrCreateContact(cfg.Url, cfg.AccountId, cfg.Token, cfg.InboxId, statusContactName, statusContactPhone(cfg.InboxId), fmt.Sprintf("evogo-qr-%s", cfg.InboxId))
 	if err != nil {
 		return "", fmt.Errorf("falha ao criar contato de status no chatwoot: %w", err)
 	}
@@ -191,7 +215,7 @@ func (s *chatwootService) NotifyQrCode(instanceId string, qrPNG []byte, code str
 		return err
 	}
 
-	if err := s.client.SendTextMessage(cfg.Url, cfg.AccountId, cfg.Token, conversationId, "scanqr"); err != nil {
+	if err := s.client.SendTextMessage(cfg.Url, cfg.AccountId, cfg.Token, conversationId, "scanqr", "outgoing"); err != nil {
 		logger.LogWarn("[%s] chatwoot: falha ao enviar aviso 'scanqr': %v", instanceId, err)
 	}
 
@@ -211,11 +235,90 @@ func (s *chatwootService) NotifyConnected(instanceId string) error {
 		return err
 	}
 
-	if err := s.client.SendTextMessage(cfg.Url, cfg.AccountId, cfg.Token, conversationId, "cw.inbox.connected"); err != nil {
+	if err := s.client.SendTextMessage(cfg.Url, cfg.AccountId, cfg.Token, conversationId, "cw.inbox.connected", "outgoing"); err != nil {
 		logger.LogWarn("[%s] chatwoot: falha ao enviar aviso de conexão: %v", instanceId, err)
 		return err
 	}
 
 	logger.LogInfo("[%s] chatwoot: aviso de conexão postado na conversa de status (conversation=%s)", instanceId, conversationId)
+	return nil
+}
+
+// jidToPhone extrai um telefone E.164-ish a partir de um JID do whatsmeow
+// (ex.: "558597731198:64@s.whatsapp.net" -> "+558597731198"). Usa o mesmo
+// identifier (JID completo) que a integração Node/Baileys já usa nessa
+// mesma conta Chatwoot, pra ficar consistente.
+func jidToPhone(jid string) string {
+	number := jid
+	if at := strings.Index(number, "@"); at != -1 {
+		number = number[:at]
+	}
+	if colon := strings.Index(number, ":"); colon != -1 {
+		number = number[:colon]
+	}
+	return "+" + number
+}
+
+// ensureRealContactConversation garante contato+conversa de um contato REAL
+// (por JID), reusando o cache em ChatwootContactMap. Travado por
+// (instanceId, jid) pra evitar criar duplicado quando duas mensagens do
+// mesmo contato chegam quase juntas.
+func (s *chatwootService) ensureRealContactConversation(cfg *chatwoot_model.ChatwootConfig, jid, senderName string) (string, error) {
+	unlock := s.lockContact(cfg.InstanceId, jid)
+	defer unlock()
+
+	if existing, err := s.contactMapRepo.GetByJid(cfg.InstanceId, jid); err == nil && existing.ChatwootConversationId != "" {
+		return existing.ChatwootConversationId, nil
+	}
+
+	name := senderName
+	phone := jidToPhone(jid)
+	if name == "" {
+		name = phone
+	}
+
+	contactId, sourceId, err := s.client.FindOrCreateContact(cfg.Url, cfg.AccountId, cfg.Token, cfg.InboxId, name, phone, jid)
+	if err != nil {
+		return "", fmt.Errorf("falha ao criar contato %s no chatwoot: %w", jid, err)
+	}
+
+	conversationId, err := s.client.CreateConversation(cfg.Url, cfg.AccountId, cfg.Token, cfg.InboxId, sourceId, contactId)
+	if err != nil {
+		return "", fmt.Errorf("falha ao criar conversa do contato %s no chatwoot: %w", jid, err)
+	}
+
+	mapping := &chatwoot_model.ChatwootContactMap{
+		InstanceId:             cfg.InstanceId,
+		Jid:                    jid,
+		ChatwootContactId:      contactId,
+		ChatwootConversationId: conversationId,
+	}
+	if err := s.contactMapRepo.Upsert(mapping); err != nil {
+		logger.LogWarn("[%s] contato/conversa criados (jid=%s) mas falha ao cachear: %v", cfg.InstanceId, jid, err)
+	}
+
+	return conversationId, nil
+}
+
+func (s *chatwootService) NotifyIncomingMessage(instanceId, jid, senderName, text string) error {
+	cfg, err := s.repo.GetByInstanceId(instanceId)
+	if err != nil || !cfg.Enabled || cfg.InboxId == "" {
+		return nil
+	}
+	if text == "" {
+		return nil
+	}
+
+	conversationId, err := s.ensureRealContactConversation(cfg, jid, senderName)
+	if err != nil {
+		logger.LogWarn("[%s] chatwoot: %v", instanceId, err)
+		return err
+	}
+
+	if err := s.client.SendTextMessage(cfg.Url, cfg.AccountId, cfg.Token, conversationId, text, "incoming"); err != nil {
+		logger.LogWarn("[%s] chatwoot: falha ao enviar mensagem de %s: %v", instanceId, jid, err)
+		return err
+	}
+
 	return nil
 }
