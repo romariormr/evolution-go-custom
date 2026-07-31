@@ -146,7 +146,12 @@ type chatwootWebhookPayload struct {
 	} `json:"conversation"`
 	Sender struct {
 		Type string `json:"type"`
+		Name string `json:"name"`
 	} `json:"sender"`
+	Attachments []struct {
+		DataUrl  string `json:"data_url"`
+		FileType string `json:"file_type"`
+	} `json:"attachments"`
 }
 
 // Webhook recebe os eventos do Chatwoot (configurado na inbox: Settings ->
@@ -183,8 +188,21 @@ func (h *chatwootHandler) Webhook(ctx *gin.Context) {
 		return
 	}
 
+	attachments := make([]chatwoot_service.AgentReplyAttachment, 0, len(payload.Attachments))
+	for _, a := range payload.Attachments {
+		if a.DataUrl == "" {
+			continue
+		}
+		attachments = append(attachments, chatwoot_service.AgentReplyAttachment{DataUrl: a.DataUrl, FileType: a.FileType})
+	}
+
 	conversationId := fmt.Sprintf("%d", payload.Conversation.Id)
-	if err := h.service.HandleAgentReply(instanceId, conversationId, payload.Content); err != nil {
+	reply := chatwoot_service.AgentReplyStruct{
+		Content:     payload.Content,
+		SenderName:  payload.Sender.Name,
+		Attachments: attachments,
+	}
+	if err := h.service.HandleAgentReply(instanceId, conversationId, reply); err != nil {
 		ctx.JSON(http.StatusOK, gin.H{"message": "processed with error", "error": err.Error()})
 		return
 	}
