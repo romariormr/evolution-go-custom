@@ -9,6 +9,7 @@ import (
 
 type ChatwootContactMapRepository interface {
 	GetByJid(instanceId, jid string) (*chatwoot_model.ChatwootContactMap, error)
+	GetByConversationId(instanceId, conversationId string) (*chatwoot_model.ChatwootContactMap, error)
 	Upsert(m *chatwoot_model.ChatwootContactMap) error
 }
 
@@ -23,6 +24,15 @@ func NewChatwootContactMapRepository(db *gorm.DB) ChatwootContactMapRepository {
 func (r *chatwootContactMapRepository) GetByJid(instanceId, jid string) (*chatwoot_model.ChatwootContactMap, error) {
 	var m chatwoot_model.ChatwootContactMap
 	err := r.db.Where("instance_id = ? AND jid = ?", instanceId, jid).First(&m).Error
+	if err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
+func (r *chatwootContactMapRepository) GetByConversationId(instanceId, conversationId string) (*chatwoot_model.ChatwootContactMap, error) {
+	var m chatwoot_model.ChatwootContactMap
+	err := r.db.Where("instance_id = ? AND chatwoot_conversation_id = ?", instanceId, conversationId).First(&m).Error
 	if err != nil {
 		return nil, err
 	}
