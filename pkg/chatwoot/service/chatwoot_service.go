@@ -66,8 +66,10 @@ type ChatwootService interface {
 	NotifyIncomingMessage(instanceId, jid, senderName, text string) error
 
 	// NotifyIncomingMedia é a versão do NotifyIncomingMessage pra mídia (imagem,
-	// áudio, vídeo, documento) — mediaType é "image"/"video"/"audio"/"document".
-	NotifyIncomingMedia(instanceId, jid, senderName string, data []byte, mediaType, filename, caption string) error
+	// áudio, vídeo, documento) — mimeType é o Content-Type real (ex.: "audio/ogg"),
+	// necessário pro Chatwoot renderizar o anexo certo (player de áudio/vídeo/
+	// imagem) em vez de link de download genérico.
+	NotifyIncomingMedia(instanceId, jid, senderName string, data []byte, mimeType, filename, caption string) error
 
 	// HandleAgentReply processa o webhook do Chatwoot quando um agente responde
 	// numa conversa — resolve o JID a partir da conversa e reenvia pro WhatsApp
@@ -260,7 +262,7 @@ func (s *chatwootService) NotifyQrCode(instanceId string, qrPNG []byte, code str
 		return err
 	}
 
-	if err := s.client.SendMediaMessage(cfg.Url, cfg.AccountId, cfg.Token, conversationId, qrPNG, "qrcode.png", "qrgeneratedsuccesfully", "outgoing"); err != nil {
+	if err := s.client.SendMediaMessage(cfg.Url, cfg.AccountId, cfg.Token, conversationId, qrPNG, "qrcode.png", "image/png", "qrgeneratedsuccesfully", "outgoing"); err != nil {
 		logger.LogWarn("[%s] chatwoot: falha ao enviar QR code: %v", instanceId, err)
 		return err
 	}
@@ -373,7 +375,7 @@ func (s *chatwootService) NotifyIncomingMessage(instanceId, jid, senderName, tex
 	return nil
 }
 
-func (s *chatwootService) NotifyIncomingMedia(instanceId, jid, senderName string, data []byte, mediaType, filename, caption string) error {
+func (s *chatwootService) NotifyIncomingMedia(instanceId, jid, senderName string, data []byte, mimeType, filename, caption string) error {
 	cfg, err := s.repo.GetByInstanceId(instanceId)
 	if err != nil || !cfg.Enabled || cfg.InboxId == "" {
 		return nil
@@ -388,8 +390,10 @@ func (s *chatwootService) NotifyIncomingMedia(instanceId, jid, senderName string
 		return err
 	}
 
-	if err := s.client.SendMediaMessage(cfg.Url, cfg.AccountId, cfg.Token, conversationId, data, filename, caption, "incoming"); err != nil {
-		logger.LogWarn("[%s] chatwoot: falha ao enviar mídia (%s) de %s: %v", instanceId, mediaType, jid, err)
+	// mimeType real (ex.: "audio/ogg") precisa ir no upload — sem ele o Chatwoot
+	// classifica o anexo como "file" genérico em vez de audio/image/video.
+	if err := s.client.SendMediaMessage(cfg.Url, cfg.AccountId, cfg.Token, conversationId, data, filename, mimeType, caption, "incoming"); err != nil {
+		logger.LogWarn("[%s] chatwoot: falha ao enviar mídia (%s) de %s: %v", instanceId, mimeType, jid, err)
 		return err
 	}
 

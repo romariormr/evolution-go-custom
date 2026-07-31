@@ -7,6 +7,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"strconv"
 	"strings"
 	"time"
@@ -262,7 +263,7 @@ func (c *Client) SendTextMessage(baseURL, accountId, token, conversationId, cont
 // SendMediaMessage posta um arquivo (imagem, áudio, vídeo, documento) como anexo
 // numa conversa existente, com legenda opcional. messageType é "incoming"
 // (mídia real vinda do WhatsApp) ou "outgoing" (QR code, avisos de sistema).
-func (c *Client) SendMediaMessage(baseURL, accountId, token, conversationId string, mediaBytes []byte, filename, caption, messageType string) error {
+func (c *Client) SendMediaMessage(baseURL, accountId, token, conversationId string, mediaBytes []byte, filename, mimeType, caption, messageType string) error {
 	url := fmt.Sprintf("%s/api/v1/accounts/%s/conversations/%s/messages", strings.TrimRight(baseURL, "/"), accountId, conversationId)
 
 	buildRequest := func() (*http.Request, error) {
@@ -276,7 +277,16 @@ func (c *Client) SendMediaMessage(baseURL, accountId, token, conversationId stri
 			return nil, err
 		}
 
-		part, err := writer.CreateFormFile("attachments[]", filename)
+		// CreateFormFile sempre manda "application/octet-stream" — sem o
+		// Content-Type real (audio/ogg, video/mp4 etc), o Chatwoot classifica o
+		// anexo como "file" genérico em vez de renderizar o player de
+		// áudio/vídeo/imagem certo. Por isso monta a parte manualmente.
+		header := textproto.MIMEHeader{}
+		header.Set("Content-Disposition", fmt.Sprintf(`form-data; name="attachments[]"; filename="%s"`, filename))
+		if mimeType != "" {
+			header.Set("Content-Type", mimeType)
+		}
+		part, err := writer.CreatePart(header)
 		if err != nil {
 			return nil, err
 		}
