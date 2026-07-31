@@ -8,6 +8,7 @@ import (
 	chatwoot_client "github.com/EvolutionAPI/evolution-go/pkg/chatwoot/client"
 	chatwoot_model "github.com/EvolutionAPI/evolution-go/pkg/chatwoot/model"
 	chatwoot_repository "github.com/EvolutionAPI/evolution-go/pkg/chatwoot/repository"
+	instance_model "github.com/EvolutionAPI/evolution-go/pkg/instance/model"
 	instance_repository "github.com/EvolutionAPI/evolution-go/pkg/instance/repository"
 	"github.com/gomessguii/logger"
 )
@@ -59,6 +60,26 @@ type ChatwootService interface {
 	// Chatwoot, criando contato/conversa do contato real (por JID) se ainda não
 	// existir. No-op silencioso se a instância não tem Chatwoot habilitado.
 	NotifyIncomingMessage(instanceId, jid, senderName, text string) error
+
+	// HandleAgentReply processa o webhook do Chatwoot quando um agente responde
+	// numa conversa — resolve o JID a partir da conversa e reenvia pro WhatsApp
+	// via MessageSender. No-op silencioso se a conversa não corresponde a um
+	// contato real conhecido (ex.: é a conversa de status QR/conexão).
+	HandleAgentReply(instanceId, chatwootConversationId, content string) error
+
+	// SetSender injeta o MessageSender depois da construção — necessário porque
+	// send_service depende de whatsmeow_service, que depende de chatwoot_service
+	// (pro fluxo de entrada), então não dá pra passar isso no construtor sem
+	// criar um ciclo de inicialização em main.go.
+	SetSender(sender MessageSender)
+}
+
+// MessageSender é a única coisa que chatwoot_service precisa do sendMessage
+// pra devolver a resposta do agente pro WhatsApp — interface local (em vez de
+// importar pkg/sendMessage/service direto) pra evitar ciclo de import:
+// sendMessage -> whatsmeow -> chatwoot -> sendMessage.
+type MessageSender interface {
+	SendText(number, text string, instance *instance_model.Instance) error
 }
 
 // Contato sintético usado só pra carregar a conversa de status (QR code, conectado)
@@ -80,6 +101,7 @@ type chatwootService struct {
 	contactMapRepo chatwoot_repository.ChatwootContactMapRepository
 	instanceRepo   instance_repository.InstanceRepository
 	client         *chatwoot_client.Client
+	sender         MessageSender
 
 	// contactLocks serializa find-or-create por (instanceId, jid) — sem isso,
 	// duas mensagens quase simultâneas do mesmo contato podem criar dois
@@ -96,6 +118,10 @@ func NewChatwootService(repo chatwoot_repository.ChatwootRepository, contactMapR
 		instanceRepo:   instanceRepo,
 		client:         chatwoot_client.NewClient(),
 	}
+}
+
+func (s *chatwootService) SetSender(sender MessageSender) {
+	s.sender = sender
 }
 
 func (s *chatwootService) lockContact(instanceId, jid string) func() {
@@ -320,5 +346,36 @@ func (s *chatwootService) NotifyIncomingMessage(instanceId, jid, senderName, tex
 		return err
 	}
 
+	return nil
+}
+
+func (s *chatwootService) HandleAgentReply(instanceId, chatwootConversationId, content string) error {
+	if content == "" || s.sender == nil {
+		return nil
+	}
+
+	mapping, err := s.contactMapRepo.GetByConversationId(instanceId, chatwootConversationId)
+	if err != nil {
+		// Conversa não corresponde a nenhum contato real conhecido (ex.: é a
+		// conversa de status QR/conexão, ou webhook de outra instância) — ignora.
+		return nil
+	}
+
+	instance, err := s.instanceRepo.GetInstanceByID(instanceId)
+	if err != nil {
+		return fmt.Errorf("instância não encontrada: %w", err)
+	}
+
+	number := mapping.Jid
+	if at := strings.Index(number, "@"); at != -1 {
+		number = number[:at]
+	}
+
+	if err := s.sender.SendText(number, content, instance); err != nil {
+		logger.LogWarn("[%s] chatwoot: falha ao reenviar resposta do agente pro WhatsApp (jid=%s): %v", instanceId, mapping.Jid, err)
+		return err
+	}
+
+	logger.LogInfo("[%s] chatwoot: resposta do agente reenviada pro WhatsApp (jid=%s)", instanceId, mapping.Jid)
 	return nil
 }

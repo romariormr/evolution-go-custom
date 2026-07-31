@@ -78,6 +78,18 @@ var devMode = flag.Bool("dev", false, "Enable development mode")
 
 var version = "0.0.0"
 
+// chatwootMessageSenderAdapter implementa chatwoot_service.MessageSender por cima
+// do send_service.SendService já existente — evita chatwoot_service importar
+// pkg/sendMessage/service direto (ciclo: sendMessage -> whatsmeow -> chatwoot).
+type chatwootMessageSenderAdapter struct {
+	sendService send_service.SendService
+}
+
+func (a chatwootMessageSenderAdapter) SendText(number, text string, instance *instance_model.Instance) error {
+	_, err := a.sendService.SendText(&send_service.TextStruct{Number: number, Text: text}, instance)
+	return err
+}
+
 func init() {
 	// ldflags -X main.version= sets this at compile time.
 	// If not set (or still default), try reading from VERSION file.
@@ -202,6 +214,7 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 		loggerWrapper,
 	)
 	sendMessageService := send_service.NewSendService(clientPointer, whatsmeowService, config, loggerWrapper)
+	chatwootService.SetSender(chatwootMessageSenderAdapter{sendService: sendMessageService})
 	userService := user_service.NewUserService(clientPointer, whatsmeowService, loggerWrapper)
 	messageService := message_service.NewMessageService(clientPointer, messageRepository, whatsmeowService, loggerWrapper)
 	chatService := chat_service.NewChatService(clientPointer, whatsmeowService, loggerWrapper)
@@ -251,6 +264,11 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 		server_handler.NewServerHandler(),
 		chatwootHandler,
 	).AssignRoutes(r)
+
+	// Webhook do Chatwoot (resposta do agente -> WhatsApp) — PÚBLICO, o Chatwoot
+	// não manda apikey. Configurar em: Chatwoot -> Inbox -> Settings ->
+	// Configuration -> Webhook URL = https://<dominio>/instance/chatwoot/webhook/:instanceId
+	r.POST("/instance/chatwoot/webhook/:instanceId", chatwootHandler.Webhook)
 
 	// Controle de acesso (usuários/grupos) — rotas /access/*
 	accessRepository := access_repository.NewAccessRepository(db)

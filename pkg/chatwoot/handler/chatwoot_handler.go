@@ -2,6 +2,7 @@ package chatwoot_handler
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 
 	chatwoot_service "github.com/EvolutionAPI/evolution-go/pkg/chatwoot/service"
@@ -14,6 +15,7 @@ type ChatwootHandler interface {
 	SetConfig(ctx *gin.Context)
 	DeleteConfig(ctx *gin.Context)
 	ResetStatusConversation(ctx *gin.Context)
+	Webhook(ctx *gin.Context)
 }
 
 type chatwootHandler struct {
@@ -132,4 +134,60 @@ func (h *chatwootHandler) ResetStatusConversation(ctx *gin.Context) {
 	}
 
 	ctx.JSON(http.StatusOK, gin.H{"message": "status conversation reset"})
+}
+
+type chatwootWebhookPayload struct {
+	Event        string `json:"event"`
+	MessageType  string `json:"message_type"`
+	Private      bool   `json:"private"`
+	Content      string `json:"content"`
+	Conversation struct {
+		Id int `json:"id"`
+	} `json:"conversation"`
+	Sender struct {
+		Type string `json:"type"`
+	} `json:"sender"`
+}
+
+// Webhook recebe os eventos do Chatwoot (configurado na inbox: Settings ->
+// Configuration -> Webhook URL). Rota PÚBLICA, sem o middleware de apikey —
+// o Chatwoot não manda esse header. Sempre responde 200 (mesmo em no-op) pra
+// não entrar em retry-loop do lado do Chatwoot.
+//
+// ⚠️ Sem segredo compartilhado: qualquer um que souber essa URL pode postar
+// um payload fingindo ser o Chatwoot e mandar mensagem pelo WhatsApp da
+// instância. Recomendado restringir por IP (proxy/firewall) até ter um
+// segredo/HMAC validado aqui.
+// @Summary Recebe webhook do Chatwoot (resposta do agente)
+// @Tags Chatwoot
+// @Accept json
+// @Produce json
+// @Param instanceId path string true "Instance ID"
+// @Success 200 {object} gin.H
+// @Router /instance/chatwoot/webhook/{instanceId} [post]
+func (h *chatwootHandler) Webhook(ctx *gin.Context) {
+	instanceId := ctx.Param("instanceId")
+	if instanceId == "" {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "instanceId is required"})
+		return
+	}
+
+	var payload chatwootWebhookPayload
+	if err := ctx.ShouldBindJSON(&payload); err != nil {
+		ctx.JSON(http.StatusOK, gin.H{"message": "ignored (invalid payload)"})
+		return
+	}
+
+	if payload.Event != "message_created" || payload.MessageType != "outgoing" || payload.Private || payload.Sender.Type != "user" {
+		ctx.JSON(http.StatusOK, gin.H{"message": "ignored"})
+		return
+	}
+
+	conversationId := fmt.Sprintf("%d", payload.Conversation.Id)
+	if err := h.service.HandleAgentReply(instanceId, conversationId, payload.Content); err != nil {
+		ctx.JSON(http.StatusOK, gin.H{"message": "processed with error", "error": err.Error()})
+		return
+	}
+
+	ctx.JSON(http.StatusOK, gin.H{"message": "ok"})
 }
