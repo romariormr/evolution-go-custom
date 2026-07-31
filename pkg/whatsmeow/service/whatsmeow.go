@@ -1707,6 +1707,20 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 			}
 		}
 
+		if mycli.chatwootService != nil && !evt.Info.IsFromMe && !evt.Info.IsGroup {
+			text := evt.Message.GetConversation()
+			if text == "" {
+				text = evt.Message.GetExtendedTextMessage().GetText()
+			}
+			if text != "" {
+				jid := evt.Info.Chat.String()
+				pushName := evt.Info.PushName
+				go func() {
+					_ = mycli.chatwootService.NotifyIncomingMessage(mycli.Instance.Id, jid, pushName, text)
+				}()
+			}
+		}
+
 		mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] ===== MESSAGE PROCESSING COMPLETED ===== ID: %s, From: %s, Type: %s, Webhook: %v", mycli.userID, evt.Info.ID, evt.Info.Chat.String(), evt.Info.Type, doWebhook)
 	case *events.Receipt:
 		doWebhook = true

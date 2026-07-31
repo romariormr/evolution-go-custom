@@ -110,7 +110,7 @@ func (c *Client) doJSON(method, url, token string, body map[string]any) ([]byte,
 // (contact_inbox), criando-o se necessário. Retorna o contactId e o sourceId (identidade
 // do contato dentro do canal da inbox, usado pra abrir a conversa).
 // Doc: POST /api/v1/accounts/{account_id}/contacts
-func (c *Client) FindOrCreateContact(baseURL, accountId, token, inboxId, name, phoneNumber string) (contactId string, sourceId string, err error) {
+func (c *Client) FindOrCreateContact(baseURL, accountId, token, inboxId, name, phoneNumber, identifier string) (contactId string, sourceId string, err error) {
 	url := fmt.Sprintf("%s/api/v1/accounts/%s/contacts", strings.TrimRight(baseURL, "/"), accountId)
 
 	inboxIdInt, _ := strconv.Atoi(inboxId)
@@ -118,7 +118,7 @@ func (c *Client) FindOrCreateContact(baseURL, accountId, token, inboxId, name, p
 		"inbox_id":     inboxIdInt,
 		"name":         name,
 		"phone_number": phoneNumber,
-		"identifier":   fmt.Sprintf("evogo-qr-%s", inboxId),
+		"identifier":   identifier,
 	}
 
 	respBody, err := c.doJSON(http.MethodPost, url, token, body)
@@ -232,14 +232,17 @@ func (c *Client) CreateConversation(baseURL, accountId, token, inboxId, sourceId
 	return fmt.Sprintf("%d", parsed.Id), nil
 }
 
-// SendTextMessage posta uma mensagem de texto (saída do sistema) numa conversa existente.
+// SendTextMessage posta uma mensagem de texto numa conversa existente.
+// messageType é "outgoing" (nosso sistema/agente falando) ou "incoming"
+// (mensagem real vinda do contato do WhatsApp) — Chatwoot exibe e conta
+// não-lidas de forma diferente pra cada um.
 // Doc: POST /api/v1/accounts/{account_id}/conversations/{conversation_id}/messages
-func (c *Client) SendTextMessage(baseURL, accountId, token, conversationId, content string) error {
+func (c *Client) SendTextMessage(baseURL, accountId, token, conversationId, content, messageType string) error {
 	url := fmt.Sprintf("%s/api/v1/accounts/%s/conversations/%s/messages", strings.TrimRight(baseURL, "/"), accountId, conversationId)
 
 	body := map[string]any{
 		"content":      content,
-		"message_type": "outgoing",
+		"message_type": messageType,
 		"private":      false,
 	}
 
