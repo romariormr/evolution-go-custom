@@ -48,6 +48,7 @@ type Config struct {
 	WhatsappVersionMinor int
 	WhatsappVersionPatch int
 	WhatsappPlatform     string
+	MessageSecretsRetentionDays int
 	ProxyProtocol        string
 	ProxyHost            string
 	ProxyPort            string
@@ -271,6 +272,15 @@ func Load() *Config {
 		whatsappPlatform = "desktop"
 	}
 
+	// 0 (padrão) = desabilitado. whatsmeow_message_secrets não tem expurgo
+	// nativo (cresce pra sempre) — ver pkg/maintenance/message_secrets_cleanup.go.
+	messageSecretsRetentionDays := 0
+	if v := os.Getenv(config_env.MESSAGE_SECRETS_RETENTION_DAYS); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil {
+			messageSecretsRetentionDays = parsed
+		}
+	}
+
 	proxyProtocol := os.Getenv(config_env.PROXY_PROTOCOL)
 	proxyHost := os.Getenv(config_env.PROXY_HOST)
 	proxyPort := os.Getenv(config_env.PROXY_PORT)
@@ -373,6 +383,7 @@ func Load() *Config {
 		WhatsappVersionMinor: minor,
 		WhatsappVersionPatch: patch,
 		WhatsappPlatform:     whatsappPlatform,
+		MessageSecretsRetentionDays: messageSecretsRetentionDays,
 		ProxyProtocol:        proxyProtocol,
 		ProxyHost:            proxyHost,
 		ProxyPort:            proxyPort,

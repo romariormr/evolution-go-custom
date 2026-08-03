@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"path/filepath"
 	"syscall"
@@ -54,6 +55,7 @@ import (
 	label_repository "github.com/EvolutionAPI/evolution-go/pkg/label/repository"
 	label_service "github.com/EvolutionAPI/evolution-go/pkg/label/service"
 	logger_wrapper "github.com/EvolutionAPI/evolution-go/pkg/logger"
+	"github.com/EvolutionAPI/evolution-go/pkg/maintenance"
 	message_handler "github.com/EvolutionAPI/evolution-go/pkg/message/handler"
 	message_model "github.com/EvolutionAPI/evolution-go/pkg/message/model"
 	message_repository "github.com/EvolutionAPI/evolution-go/pkg/message/repository"
@@ -258,8 +260,10 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 	// License routes (always accessible, even without license)
 	core.LicenseRoutes(r, runtimeCtx)
 
+	authMiddleware := auth_middleware.NewMiddleware(config, instanceService)
+
 	routes.NewRouter(
-		auth_middleware.NewMiddleware(config, instanceService),
+		authMiddleware,
 		instance_handler.NewInstanceHandler(instanceService, config),
 		user_handler.NewUserHandler(userService),
 		send_handler.NewSendHandler(sendMessageService),
@@ -299,6 +303,45 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 	if config.ConnectOnStartup {
 		go whatsmeowService.ConnectOnStartup(config.ClientName)
 	}
+
+	// Limpeza periódica de whatsmeow_message_secrets (sem expurgo nativo na lib
+	// oficial, cresce pra sempre — ver pkg/maintenance). Desabilitado por padrão
+	// (MessageSecretsRetentionDays=0); roda 1x no boot e depois a cada 24h.
+	if config.MessageSecretsRetentionDays > 0 {
+		go func() {
+			runCleanup := func() {
+				deleted, err := maintenance.CleanupMessageSecrets(db, authDB, config.MessageSecretsRetentionDays)
+				if err != nil {
+					logger.LogError("[maintenance] falha na limpeza de message_secrets: %v", err)
+				} else if deleted > 0 {
+					logger.LogInfo("[maintenance] message_secrets: %d linha(s) removida(s) (retenção %dd)", deleted, config.MessageSecretsRetentionDays)
+				}
+			}
+			runCleanup()
+			ticker := time.NewTicker(24 * time.Hour)
+			defer ticker.Stop()
+			for range ticker.C {
+				runCleanup()
+			}
+		}()
+	}
+
+	// Endpoint admin pra disparar a limpeza manualmente (testar sem esperar 24h,
+	// ou rodar mesmo com MessageSecretsRetentionDays=0 passando ?days= explícito).
+	r.POST("/admin/maintenance/message-secrets-cleanup", authMiddleware.AuthAdmin, func(c *gin.Context) {
+		days := config.MessageSecretsRetentionDays
+		if v := c.Query("days"); v != "" {
+			if parsed, err := strconv.Atoi(v); err == nil {
+				days = parsed
+			}
+		}
+		deleted, err := maintenance.CleanupMessageSecrets(db, authDB, days)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"retentionDays": days, "deleted": deleted})
+	})
 
 	r.GET("/ws", func(c *gin.Context) {
 		token := c.Query("token")
