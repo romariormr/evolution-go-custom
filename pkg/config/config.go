@@ -16,6 +16,16 @@ import (
 	config_env "github.com/EvolutionAPI/evolution-go/pkg/config/env"
 )
 
+// Fallback usado quando WHATSAPP_VERSION_MAJOR/MINOR/PATCH não está no
+// ambiente — precisa ser atualizado de tempos em tempos (ver commits
+// "proto: update to vXXXXXXX" em github.com/tulir/whatsmeow). Última
+// atualização: 2026-07 (mesma versão validada em produção nesta sessão).
+const (
+	fallbackWhatsappVersionMajor = 2
+	fallbackWhatsappVersionMinor = 3000
+	fallbackWhatsappVersionPatch = 1044362777
+)
+
 type Config struct {
 	PostgresAuthDB       string
 	postgresUsersDB      string
@@ -296,18 +306,29 @@ func Load() *Config {
 		checkUserExists = "true"
 	}
 
-	// Convertendo para int com valores padrão caso estejam vazios
-	major := 0
+	// Convertendo para int, com fallback pra uma versão conhecida-boa (não pra
+	// 0 — 0.0.0 é uma versão que o WhatsApp recusa de cara). Sem essas
+	// variáveis no ambiente, o código tentava raspar web.whatsapp.com/sw.js
+	// (fetchWhatsAppWebVersion em whatsmeow.go) — não confiável, CDN cacheia e
+	// retorna valor errado. Esse fallback fica velho com o tempo; ajuste
+	// periodicamente ou prefira sempre configurar as env vars.
+	major := fallbackWhatsappVersionMajor
 	if whatsappVersionMajor != "" {
-		major, _ = strconv.Atoi(whatsappVersionMajor)
+		if parsed, err := strconv.Atoi(whatsappVersionMajor); err == nil {
+			major = parsed
+		}
 	}
-	minor := 0
+	minor := fallbackWhatsappVersionMinor
 	if whatsappVersionMinor != "" {
-		minor, _ = strconv.Atoi(whatsappVersionMinor)
+		if parsed, err := strconv.Atoi(whatsappVersionMinor); err == nil {
+			minor = parsed
+		}
 	}
-	patch := 0
+	patch := fallbackWhatsappVersionPatch
 	if whatsappVersionPatch != "" {
-		patch, _ = strconv.Atoi(whatsappVersionPatch)
+		if parsed, err := strconv.Atoi(whatsappVersionPatch); err == nil {
+			patch = parsed
+		}
 	}
 
 	qrMaxCount := 5 // Valor padrão

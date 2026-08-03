@@ -3,6 +3,13 @@
 #   - Imagem buildada no host: docker build -t evolution-go-custom:local .
 #   - Traefik já rodando no Swarm (ajuste TRAEFIK_NETWORK)
 #   - Bancos evogo_auth e evogo_users criados no PostgreSQL externo
+#   - Volumes externos criados ANTES do primeiro deploy (nomes com o
+#     prefixo do stack, ex.: "evolution-go_evolution_go_data" — confirme o
+#     nome exato via `docker volume ls` se recriar em outro stack name):
+#       docker volume create evolution-go_evolution_go_data
+#       docker volume create evolution-go_evolution_go_logs
+#     Sem isso, recriar a stack apaga os volumes automáticos e perde o
+#     estado do WhatsApp (precisa escanear QR de novo em todas as instâncias).
 #
 # Variáveis de ambiente da stack (Portainer → Environment variables):
 #   GLOBAL_API_KEY   — chave global da API (uuid forte)
@@ -10,6 +17,8 @@
 #   DB_HOST          — host do PostgreSQL externo
 #   DB_USER          — usuário do banco (owner dos DBs evogo_auth/evogo_users)
 #   DB_PASSWORD      — senha do usuário
+#   WHATSAPP_VERSION_MAJOR/MINOR/PATCH, WHATSAPP_PLATFORM — ver .env.example
+#   MESSAGE_SECRETS_RETENTION_DAYS — ver .env.example
 
 version: "3.8"
 
@@ -37,18 +46,33 @@ services:
       EVENT_IGNORE_STATUS: "true"
       QRCODE_MAX_COUNT: "5"
       CHECK_USER_EXISTS: "true"
-    ports:
-      - "4000:4000"
+      WHATSAPP_PLATFORM: "${WHATSAPP_PLATFORM:-desktop}"
+      WHATSAPP_VERSION_MAJOR: "${WHATSAPP_VERSION_MAJOR:-2}"
+      WHATSAPP_VERSION_MINOR: "${WHATSAPP_VERSION_MINOR:-3000}"
+      WHATSAPP_VERSION_PATCH: "${WHATSAPP_VERSION_PATCH:-1044362777}"
+      MESSAGE_SECRETS_RETENTION_DAYS: "${MESSAGE_SECRETS_RETENTION_DAYS:-30}"
     volumes:
       - evolution_go_data:/app/dbdata
       - evolution_go_logs:/app/logs
     networks:
       - traefik_net
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:4000/server/ok"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     deploy:
       replicas: 1
       restart_policy:
         condition: any
         delay: 10s
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2"
+        reservations:
+          memory: 512M
       labels:
         traefik.enable: "true"
         traefik.docker.network: "${TRAEFIK_NETWORK:-minha_rede}"
@@ -57,9 +81,15 @@ services:
         traefik.http.routers.evolutiongo.tls: "true"
         traefik.http.services.evolutiongo.loadbalancer.server.port: "4000"
 
+# Sem "ports:" de propósito — só acessível via Traefik (TLS), não expõe HTTP
+# puro direto na porta do host. Se precisar acesso direto pra debug, use
+# `docker exec` ou publique manualmente só durante o debug.
+
 volumes:
   evolution_go_data:
+    external: true
   evolution_go_logs:
+    external: true
 
 networks:
   traefik_net:
