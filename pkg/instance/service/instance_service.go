@@ -86,10 +86,14 @@ type ConnectStruct struct {
 }
 
 type StatusStruct struct {
-	Connected bool
-	LoggedIn  bool
-	myJid     *types.JID
-	Name      string
+	InstanceId   string     `json:"instanceId"`
+	InstanceName string     `json:"instanceName"`
+	Connected    bool       `json:"connected"`
+	LoggedIn     bool       `json:"loggedIn"`
+	Jid          *types.JID `json:"jid,omitempty"`
+	// Name é o PushName do WhatsApp (nome de exibição do perfil), não o nome
+	// configurado da instância — esse vem em InstanceName.
+	Name string `json:"pushName"`
 }
 
 // ReachoutTimelockStruct describes WhatsApp's reachout timelock for the account
@@ -418,10 +422,12 @@ func (i instances) Status(instance *instance_model.Instance) (*StatusStruct, err
 	}
 
 	status := &StatusStruct{
-		Connected: isConnected,
-		LoggedIn:  isLoggedIn,
-		myJid:     myJid,
-		Name:      name,
+		InstanceId:   instance.Id,
+		InstanceName: instance.Name,
+		Connected:    isConnected,
+		LoggedIn:     isLoggedIn,
+		Jid:          myJid,
+		Name:         name,
 	}
 
 	return status, nil
