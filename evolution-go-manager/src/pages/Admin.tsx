@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Input, Label } from '@evoapi/design-system';
-import { Loader2, PlugZap, RefreshCw, Save, Trash2, Upload } from 'lucide-react';
+import { Copy, KeyRound, Loader2, PlugZap, RefreshCw, Save, Trash2, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import * as accessApi from '@/services/api/access';
 import * as instancesApi from '@/services/api/instances';
@@ -102,6 +102,17 @@ export default function Admin() {
     catch (error) { toast.error(errorMessage(error)); }
   };
 
+  const regenerateGroupKey = async (group: AccessGroup) => {
+    if (!window.confirm(`Gerar nova chave de API para ${group.name}? A chave atual deixa de funcionar.`)) return;
+    try { await accessApi.regenerateGroupApiKey(group.id); toast.success('Nova chave gerada.'); await load(); }
+    catch (error) { toast.error(errorMessage(error)); }
+  };
+
+  const copyGroupKey = async (apiKey: string) => {
+    try { await navigator.clipboard.writeText(apiKey); toast.success('Chave copiada.'); }
+    catch { toast.error('Não foi possível copiar a chave.'); }
+  };
+
   const changeLink = async (operation: 'link' | 'unlink') => {
     if (!link.groupId || !link.instanceId) return toast.error('Selecione um grupo e uma instância.');
     try {
@@ -166,7 +177,7 @@ export default function Admin() {
       <div className="overflow-x-auto rounded-lg border"><table className="w-full text-sm"><thead className="bg-muted"><tr><th className="p-3 text-left">Usuário</th><th className="p-3 text-left">Perfil</th><th className="p-3 text-left">Grupos</th><th className="p-3 text-right">Ações</th></tr></thead><tbody>{users.map((user) => <tr key={user.id} className="border-t"><td className="p-3"><div className="font-medium">{user.displayName || user.username}</div><div className="text-muted-foreground">{user.username} · {user.authSource}{user.mustChangePassword ? ' · troca pendente' : ''}</div></td><td className="p-3">{user.role}</td><td className="p-3"><div className="flex flex-wrap gap-2">{groups.map((group) => <label key={group.id} className="flex items-center gap-1"><input type="checkbox" checked={user.groups?.some((item) => item.id === group.id) || false} onChange={() => void toggleUserGroup(user, group.id)} />{group.name}</label>)}</div></td><td className="p-3 text-right"><Button variant="outline" className="mr-2" onClick={() => void resetPassword(user)}>Redefinir senha</Button><Button variant="outline" disabled={user.id === currentUser?.id} onClick={() => void removeUser(user)}><Trash2 className="h-4 w-4" /></Button></td></tr>)}</tbody></table></div>
     </div>}
 
-    {section === 'groups' && <div className="space-y-5"><form onSubmit={createGroup} className="grid gap-3 rounded-lg border p-4 md:grid-cols-[1fr_2fr_auto]"><div><Label>Nome</Label><Input value={newGroup.name} onChange={(e) => setNewGroup({ ...newGroup, name: e.target.value })} required /></div><div><Label>DN LDAP (opcional)</Label><Input value={newGroup.ldapGroupDn} onChange={(e) => setNewGroup({ ...newGroup, ldapGroupDn: e.target.value })} /></div><div className="flex items-end"><Button>Criar grupo</Button></div></form><div className="grid gap-3 md:grid-cols-2">{groups.map((group) => <div key={group.id} className="flex items-center justify-between rounded-lg border p-4"><div><div className="font-medium">{group.name}</div><div className="text-xs text-muted-foreground break-all">{group.ldapGroupDn || 'Sem vínculo LDAP'}</div></div><Button variant="outline" onClick={() => void removeGroup(group)}><Trash2 className="h-4 w-4" /></Button></div>)}</div></div>}
+    {section === 'groups' && <div className="space-y-5"><form onSubmit={createGroup} className="grid gap-3 rounded-lg border p-4 md:grid-cols-[1fr_2fr_auto]"><div><Label>Nome</Label><Input value={newGroup.name} onChange={(e) => setNewGroup({ ...newGroup, name: e.target.value })} required /></div><div><Label>DN LDAP (opcional)</Label><Input value={newGroup.ldapGroupDn} onChange={(e) => setNewGroup({ ...newGroup, ldapGroupDn: e.target.value })} /></div><div className="flex items-end"><Button>Criar grupo</Button></div></form><div className="grid gap-3 md:grid-cols-2">{groups.map((group) => <div key={group.id} className="space-y-3 rounded-lg border p-4"><div className="flex items-center justify-between gap-2 rounded-md bg-muted p-2"><div className="min-w-0"><div className="text-xs text-muted-foreground">Chave de API do grupo</div><div className="truncate font-mono text-xs">{group.apiKey || 'gerando...'}</div></div><div className="flex shrink-0 gap-1"><Button variant="outline" title="Copiar chave" onClick={() => void copyGroupKey(group.apiKey)}><Copy className="h-4 w-4" /></Button><Button variant="outline" title="Gerar nova chave" onClick={() => void regenerateGroupKey(group)}><KeyRound className="h-4 w-4" /></Button></div></div><div className="flex items-center justify-between"><div><div className="font-medium">{group.name}</div><div className="text-xs text-muted-foreground break-all">{group.ldapGroupDn || 'Sem vínculo LDAP'}</div></div><Button variant="outline" onClick={() => void removeGroup(group)}><Trash2 className="h-4 w-4" /></Button></div></div>)}</div></div>}
 
     {section === 'links' && <div className="max-w-2xl space-y-4 rounded-lg border p-5"><p className="text-sm text-muted-foreground">Selecione os dois itens e aplique ou remova o vínculo. A API atual não expõe uma consulta dos vínculos existentes.</p><div><Label>Grupo</Label><select className="h-10 w-full rounded-md border bg-background px-3" value={link.groupId} onChange={(e) => setLink({ ...link, groupId: e.target.value })}><option value="">Selecione...</option>{groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select></div><div><Label>Instância</Label><select className="h-10 w-full rounded-md border bg-background px-3" value={link.instanceId} onChange={(e) => setLink({ ...link, instanceId: e.target.value })}><option value="">Selecione...</option>{instances.map((instance) => <option key={instance.id} value={instance.id}>{instance.instanceName}</option>)}</select></div><div className="flex gap-2"><Button onClick={() => void changeLink('link')}>Vincular</Button><Button variant="outline" onClick={() => void changeLink('unlink')}>Remover vínculo</Button></div></div>}
 

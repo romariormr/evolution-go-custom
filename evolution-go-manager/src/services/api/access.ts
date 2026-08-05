@@ -18,6 +18,8 @@ export const listGroups = async () => data<AccessGroup[]>(await apiClient.get('/
 export const createGroup = async (payload: { name: string; ldapGroupDn: string }) =>
   data<AccessGroup>(await apiClient.post('/access/admin/groups', payload));
 export const deleteGroup = (groupId: string) => apiClient.delete(`/access/admin/groups/${groupId}`);
+export const regenerateGroupApiKey = async (groupId: string) =>
+  data<AccessGroup>(await apiClient.post(`/access/admin/groups/${groupId}/api-key/regenerate`));
 export const linkInstance = (groupId: string, instanceId: string) =>
   apiClient.post(`/access/admin/groups/${groupId}/instances/${instanceId}`);
 export const unlinkInstance = (groupId: string, instanceId: string) =>

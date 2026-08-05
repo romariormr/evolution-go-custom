@@ -260,11 +260,19 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 	// License routes (always accessible, even without license)
 	core.LicenseRoutes(r, runtimeCtx)
 
-	authMiddleware := auth_middleware.NewMiddleware(config, instanceService)
+	// Repositório de acesso construído aqui (antes do middleware/handler que
+	// precisam dele) — accessService/Bootstrap/rotas /access/* continuam
+	// abaixo, só a construção do repositório subiu.
+	accessRepository := access_repository.NewAccessRepository(db)
+	if err := accessRepository.BackfillGroupApiKeys(); err != nil {
+		log.Printf("[ACCESS] backfill de chave de API dos grupos falhou: %v", err)
+	}
+
+	authMiddleware := auth_middleware.NewMiddleware(config, instanceService, accessRepository)
 
 	routes.NewRouter(
 		authMiddleware,
-		instance_handler.NewInstanceHandler(instanceService, config),
+		instance_handler.NewInstanceHandler(instanceService, config, accessRepository),
 		user_handler.NewUserHandler(userService),
 		send_handler.NewSendHandler(sendMessageService),
 		message_handler.NewMessageHandler(messageService),
@@ -285,7 +293,6 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 	r.POST("/instance/chatwoot/webhook/:instanceId", chatwootHandler.Webhook)
 
 	// Controle de acesso (usuários/grupos) — rotas /access/*
-	accessRepository := access_repository.NewAccessRepository(db)
 	accessService := access_service.NewAccessService(accessRepository, config)
 	if err := accessService.Bootstrap(); err != nil {
 		log.Printf("[ACCESS] bootstrap falhou: %v", err)

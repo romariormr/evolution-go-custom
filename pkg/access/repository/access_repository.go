@@ -2,6 +2,7 @@ package access_repository
 
 import (
 	access_model "github.com/EvolutionAPI/evolution-go/pkg/access/model"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -18,8 +19,14 @@ type AccessRepository interface {
 	// groups
 	CreateGroup(group *access_model.AccessGroup) error
 	GetGroupById(id string) (*access_model.AccessGroup, error)
+	GetGroupByApiKey(apiKey string) (*access_model.AccessGroup, error)
 	ListGroups() ([]*access_model.AccessGroup, error)
 	DeleteGroup(id string) error
+	RegenerateGroupApiKey(id string) (*access_model.AccessGroup, error)
+	// BackfillGroupApiKeys gera ApiKey pra grupos criados antes desse campo
+	// existir (ficam com '' até então) — chamada 1x no boot, depois de
+	// AutoMigrate (ver migrate() em main.go).
+	BackfillGroupApiKeys() error
 
 	// user<->group
 	SetUserGroups(userId string, groupIds []string) error
@@ -105,10 +112,47 @@ func (r *accessRepository) GetGroupById(id string) (*access_model.AccessGroup, e
 	return &g, nil
 }
 
+func (r *accessRepository) GetGroupByApiKey(apiKey string) (*access_model.AccessGroup, error) {
+	if apiKey == "" {
+		return nil, gorm.ErrRecordNotFound
+	}
+	var g access_model.AccessGroup
+	if err := r.db.Where("api_key = ?", apiKey).First(&g).Error; err != nil {
+		return nil, err
+	}
+	return &g, nil
+}
+
 func (r *accessRepository) ListGroups() ([]*access_model.AccessGroup, error) {
 	var groups []*access_model.AccessGroup
 	err := r.db.Order("name").Find(&groups).Error
 	return groups, err
+}
+
+func (r *accessRepository) RegenerateGroupApiKey(id string) (*access_model.AccessGroup, error) {
+	g, err := r.GetGroupById(id)
+	if err != nil {
+		return nil, err
+	}
+	g.ApiKey = uuid.NewString()
+	if err := r.db.Model(&access_model.AccessGroup{}).Where("id = ?", id).Update("api_key", g.ApiKey).Error; err != nil {
+		return nil, err
+	}
+	return g, nil
+}
+
+func (r *accessRepository) BackfillGroupApiKeys() error {
+	var groups []*access_model.AccessGroup
+	if err := r.db.Where("api_key = '' OR api_key IS NULL").Find(&groups).Error; err != nil {
+		return err
+	}
+	for _, g := range groups {
+		if err := r.db.Model(&access_model.AccessGroup{}).Where("id = ?", g.Id).
+			Update("api_key", uuid.NewString()).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *accessRepository) DeleteGroup(id string) error {

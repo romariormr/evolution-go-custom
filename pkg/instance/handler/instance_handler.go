@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	access_repository "github.com/EvolutionAPI/evolution-go/pkg/access/repository"
 	config "github.com/EvolutionAPI/evolution-go/pkg/config"
 	instance_model "github.com/EvolutionAPI/evolution-go/pkg/instance/model"
 	instance_service "github.com/EvolutionAPI/evolution-go/pkg/instance/service"
@@ -37,8 +38,9 @@ type InstanceHandler interface {
 }
 
 type instanceHandler struct {
-	config          *config.Config
-	instanceService instance_service.InstanceService
+	config           *config.Config
+	instanceService  instance_service.InstanceService
+	accessRepository access_repository.AccessRepository
 }
 
 // Create a new instance
@@ -348,6 +350,26 @@ func (i *instanceHandler) All(ctx *gin.Context) {
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
+	}
+
+	// Chave de Grupo (não a global) — restringe a resposta às instâncias
+	// vinculadas àquele grupo (ver AuthAdmin em auth_middleware.go).
+	if groupIdVal, ok := ctx.Get("groupId"); ok {
+		groupId, _ := groupIdVal.(string)
+		allowedIds, err := i.accessRepository.InstanceIdsForGroups([]string{groupId})
+		if err == nil {
+			allowed := make(map[string]bool, len(allowedIds))
+			for _, id := range allowedIds {
+				allowed[id] = true
+			}
+			filtered := make([]*instance_model.Instance, 0, len(instances))
+			for _, inst := range instances {
+				if allowed[inst.Id] {
+					filtered = append(filtered, inst)
+				}
+			}
+			instances = filtered
+		}
 	}
 
 	ctx.JSON(http.StatusOK, gin.H{"message": "success", "data": instances})
@@ -728,6 +750,6 @@ func (h *instanceHandler) ListWebhooks(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"webhooks": webhooks})
 }
 
-func NewInstanceHandler(instanceService instance_service.InstanceService, config *config.Config) InstanceHandler {
-	return &instanceHandler{instanceService: instanceService, config: config}
+func NewInstanceHandler(instanceService instance_service.InstanceService, config *config.Config, accessRepository access_repository.AccessRepository) InstanceHandler {
+	return &instanceHandler{instanceService: instanceService, config: config, accessRepository: accessRepository}
 }

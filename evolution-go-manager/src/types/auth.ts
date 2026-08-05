@@ -5,6 +5,7 @@ export interface AccessGroup {
   id: string;
   name: string;
   ldapGroupDn: string;
+  apiKey: string;
   createdAt: string;
 }
 
