@@ -43,7 +43,14 @@ type AccessGroup struct {
 	Id          string    `json:"id" gorm:"type:uuid;primaryKey"`
 	Name        string    `json:"name" gorm:"uniqueIndex;not null"`
 	LdapGroupDN string    `json:"ldapGroupDn"`
-	CreatedAt   time.Time `json:"createdAt" gorm:"autoCreateTime"`
+	// ApiKey autentica como o grupo (header apikey) em endpoints tipo
+	// /instance/all — restrito às instâncias vinculadas a esse grupo, em vez
+	// de exigir a GLOBAL_API_KEY (que vê tudo). Sem uniqueIndex no banco de
+	// propósito: grupos já existentes antes dessa coluna existir ficam com ''
+	// até o backfill rodar (ver migrate() em main.go) — índice único sobre
+	// string vazia repetida quebraria o AutoMigrate.
+	ApiKey    string    `json:"apiKey"`
+	CreatedAt time.Time `json:"createdAt" gorm:"autoCreateTime"`
 }
 
 func (AccessGroup) TableName() string { return "evogo_groups" }
@@ -51,6 +58,9 @@ func (AccessGroup) TableName() string { return "evogo_groups" }
 func (g *AccessGroup) BeforeCreate(tx *gorm.DB) error {
 	if g.Id == "" {
 		g.Id = uuid.NewString()
+	}
+	if g.ApiKey == "" {
+		g.ApiKey = uuid.NewString()
 	}
 	return nil
 }

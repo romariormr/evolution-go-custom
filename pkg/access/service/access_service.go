@@ -47,6 +47,7 @@ type AccessService interface {
 	CreateGroup(name, ldapGroupDN string) (*access_model.AccessGroup, error)
 	ListGroups() ([]*access_model.AccessGroup, error)
 	DeleteGroup(id string) error
+	RegenerateGroupApiKey(id string) (*access_model.AccessGroup, error)
 	LinkInstance(groupId, instanceId string) error
 	UnlinkInstance(groupId, instanceId string) error
 	GroupIdsForInstance(instanceId string) ([]string, error)
@@ -330,6 +331,9 @@ func (s *accessService) CreateGroup(name, ldapGroupDN string) (*access_model.Acc
 
 func (s *accessService) ListGroups() ([]*access_model.AccessGroup, error) { return s.repo.ListGroups() }
 func (s *accessService) DeleteGroup(id string) error                     { return s.repo.DeleteGroup(id) }
+func (s *accessService) RegenerateGroupApiKey(id string) (*access_model.AccessGroup, error) {
+	return s.repo.RegenerateGroupApiKey(id)
+}
 
 func (s *accessService) LinkInstance(groupId, instanceId string) error {
 	if _, err := s.repo.GetGroupById(groupId); err != nil {

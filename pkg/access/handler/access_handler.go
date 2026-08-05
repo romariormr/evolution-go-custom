@@ -58,6 +58,7 @@ func RegisterRoutes(eng *gin.Engine, h *AccessHandler) {
 		admin.GET("/groups", h.AdminListGroups)
 		admin.POST("/groups", h.AdminCreateGroup)
 		admin.DELETE("/groups/:groupId", h.AdminDeleteGroup)
+		admin.POST("/groups/:groupId/api-key/regenerate", h.AdminRegenerateGroupApiKey)
 		admin.POST("/groups/:groupId/instances/:instanceId", h.AdminLinkInstance)
 		admin.DELETE("/groups/:groupId/instances/:instanceId", h.AdminUnlinkInstance)
 
@@ -385,6 +386,15 @@ func (h *AccessHandler) AdminDeleteGroup(ctx *gin.Context) {
 		return
 	}
 	ctx.JSON(http.StatusOK, gin.H{"message": "grupo removido"})
+}
+
+func (h *AccessHandler) AdminRegenerateGroupApiKey(ctx *gin.Context) {
+	group, err := h.service.RegenerateGroupApiKey(ctx.Param("groupId"))
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"data": group})
 }
 
 func (h *AccessHandler) AdminLinkInstance(ctx *gin.Context) {
