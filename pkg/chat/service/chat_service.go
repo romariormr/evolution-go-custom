@@ -7,6 +7,8 @@ import (
 
 	instance_model "github.com/EvolutionAPI/evolution-go/pkg/instance/model"
 	logger_wrapper "github.com/EvolutionAPI/evolution-go/pkg/logger"
+	message_model "github.com/EvolutionAPI/evolution-go/pkg/message/model"
+	message_repository "github.com/EvolutionAPI/evolution-go/pkg/message/repository"
 	"github.com/EvolutionAPI/evolution-go/pkg/utils"
 	whatsmeow_service "github.com/EvolutionAPI/evolution-go/pkg/whatsmeow/service"
 	"go.mau.fi/whatsmeow"
@@ -22,12 +24,14 @@ type ChatService interface {
 	ChatMute(data *BodyStruct, instance *instance_model.Instance) (string, error)
 	ChatUnmute(data *BodyStruct, instance *instance_model.Instance) (string, error)
 	HistorySyncRequest(data *HistorySyncRequestStruct, instance *instance_model.Instance) (*whatsmeow.SendResponse, error)
+	FindMessages(data *FindMessagesStruct, instance *instance_model.Instance) ([]message_model.Message, int64, error)
 }
 
 type chatService struct {
-	clientPointer    map[string]*whatsmeow.Client
-	whatsmeowService whatsmeow_service.WhatsmeowService
-	loggerWrapper    *logger_wrapper.LoggerManager
+	clientPointer      map[string]*whatsmeow.Client
+	whatsmeowService   whatsmeow_service.WhatsmeowService
+	loggerWrapper      *logger_wrapper.LoggerManager
+	messageRepository  message_repository.MessageRepository
 }
 
 type BodyStruct struct {
@@ -37,6 +41,12 @@ type BodyStruct struct {
 type HistorySyncRequestStruct struct {
 	MessageInfo *types.MessageInfo `json:"messageInfo"`
 	Count       int                `json:"count"`
+}
+
+type FindMessagesStruct struct {
+	RemoteJid string `json:"remoteJid"`
+	Page      int    `json:"page"`
+	Limit     int    `json:"limit"`
 }
 
 func (c *chatService) ensureClientConnected(instanceId string) (*whatsmeow.Client, error) {
@@ -243,14 +253,38 @@ func (c *chatService) HistorySyncRequest(data *HistorySyncRequestStruct, instanc
 	return &res, nil
 }
 
+func (c *chatService) FindMessages(data *FindMessagesStruct, instance *instance_model.Instance) ([]message_model.Message, int64, error) {
+	page := data.Page
+	if page < 1 {
+		page = 1
+	}
+	limit := data.Limit
+	if limit < 1 || limit > 100 {
+		limit = 20
+	}
+
+	remoteJid := ""
+	if data.RemoteJid != "" {
+		recipient, ok := utils.ParseJID(data.RemoteJid)
+		if !ok {
+			return nil, 0, errors.New("invalid phone number")
+		}
+		remoteJid = recipient.String()
+	}
+
+	return c.messageRepository.FindMessages(instance.Id, remoteJid, page, limit)
+}
+
 func NewChatService(
 	clientPointer map[string]*whatsmeow.Client,
 	whatsmeowService whatsmeow_service.WhatsmeowService,
 	loggerWrapper *logger_wrapper.LoggerManager,
+	messageRepository message_repository.MessageRepository,
 ) ChatService {
 	return &chatService{
-		clientPointer:    clientPointer,
-		whatsmeowService: whatsmeowService,
-		loggerWrapper:    loggerWrapper,
+		clientPointer:     clientPointer,
+		whatsmeowService:  whatsmeowService,
+		loggerWrapper:     loggerWrapper,
+		messageRepository: messageRepository,
 	}
 }

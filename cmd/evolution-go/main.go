@@ -229,7 +229,7 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 	chatwootService.SetSender(chatwootMessageSenderAdapter{sendService: sendMessageService})
 	userService := user_service.NewUserService(clientPointer, whatsmeowService, loggerWrapper)
 	messageService := message_service.NewMessageService(clientPointer, messageRepository, whatsmeowService, loggerWrapper)
-	chatService := chat_service.NewChatService(clientPointer, whatsmeowService, loggerWrapper)
+	chatService := chat_service.NewChatService(clientPointer, whatsmeowService, loggerWrapper, messageRepository)
 	groupService := group_service.NewGroupService(clientPointer, whatsmeowService, loggerWrapper, messageRepository)
 	callService := call_service.NewCallService(clientPointer, whatsmeowService, loggerWrapper)
 	communityService := community_service.NewCommunityService(clientPointer, whatsmeowService, loggerWrapper)
