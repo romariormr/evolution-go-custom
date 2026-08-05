@@ -19,8 +19,10 @@ type UserHandler interface {
 	UnblockContact(ctx *gin.Context)
 	GetBlockList(ctx *gin.Context)
 	SetProfilePicture(ctx *gin.Context)
+	RemoveProfilePicture(ctx *gin.Context)
 	SetProfileName(ctx *gin.Context)
 	SetProfileStatus(ctx *gin.Context)
+	GetBusinessProfile(ctx *gin.Context)
 }
 
 type userHandler struct {
@@ -444,6 +446,78 @@ func (u *userHandler) SetProfilePicture(ctx *gin.Context) {
 	responseData := gin.H{"image": data.Image}
 
 	ctx.JSON(http.StatusOK, gin.H{"message": "success", "data": responseData})
+}
+
+// Remove a user's profile picture
+// @Summary Remove a user's profile picture
+// @Description Remove a user's profile picture
+// @Tags User
+// @Produce json
+// @Success 200 {object} gin.H "success"
+// @Failure 500 {object} gin.H "Internal server error"
+// @Router /user/profilePicture [delete]
+func (u *userHandler) RemoveProfilePicture(ctx *gin.Context) {
+	getInstance := ctx.MustGet("instance")
+
+	instance, ok := getInstance.(*instance_model.Instance)
+	if !ok {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "instance not found"})
+		return
+	}
+
+	resp, err := u.userService.RemoveProfilePicture(instance)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if !resp {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "failed to remove profile picture"})
+		return
+	}
+
+	ctx.JSON(http.StatusOK, gin.H{"message": "success"})
+}
+
+// Get a business profile (WhatsApp Business account)
+// @Summary Get business profile
+// @Description Get business profile
+// @Tags User
+// @Accept json
+// @Produce json
+// @Param message body user_service.GetBusinessProfileStruct true "Number"
+// @Success 200 {object} gin.H "success"
+// @Failure 400 {object} gin.H "Error on validation"
+// @Failure 500 {object} gin.H "Internal server error"
+// @Router /user/businessProfile [post]
+func (u *userHandler) GetBusinessProfile(ctx *gin.Context) {
+	getInstance := ctx.MustGet("instance")
+
+	instance, ok := getInstance.(*instance_model.Instance)
+	if !ok {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "instance not found"})
+		return
+	}
+
+	var data *user_service.GetBusinessProfileStruct
+	err := ctx.ShouldBindBodyWithJSON(&data)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if data.Number == "" {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "number is required"})
+		return
+	}
+
+	resp, err := u.userService.GetBusinessProfile(data, instance)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	ctx.JSON(http.StatusOK, gin.H{"message": "success", "data": resp})
 }
 
 // Set a user's profile name

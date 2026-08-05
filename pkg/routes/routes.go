@@ -150,8 +150,10 @@ func (r *Routes) AssignRoutes(eng *gin.Engine) {
 			routes.POST("/unblock", r.jidValidationMiddleware.ValidateNumberField(), r.userHandler.UnblockContact)
 			routes.GET("/blocklist", r.userHandler.GetBlockList)
 			routes.POST("/profilePicture", r.userHandler.SetProfilePicture)
+			routes.DELETE("/profilePicture", r.userHandler.RemoveProfilePicture)
 			routes.POST("/profileName", r.userHandler.SetProfileName)
 			routes.POST("/profileStatus", r.userHandler.SetProfileStatus)
+			routes.POST("/businessProfile", r.jidValidationMiddleware.ValidateNumberField(), r.userHandler.GetBusinessProfile)
 		}
 	}
 	routes = eng.Group("/message")

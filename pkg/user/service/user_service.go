@@ -28,8 +28,10 @@ type UserService interface {
 	UnlockContact(data *BlockStruct, instance *instance_model.Instance) (*types.Blocklist, error)
 	GetBlockList(instance *instance_model.Instance) (*types.Blocklist, error)
 	SetProfilePicture(data *SetProfilePictureStruct, instance *instance_model.Instance) (bool, error)
+	RemoveProfilePicture(instance *instance_model.Instance) (bool, error)
 	SetProfileName(data *SetProfileNameStruct, instance *instance_model.Instance) (bool, error)
 	SetProfileStatus(data *SetProfileStatusStruct, instance *instance_model.Instance) (bool, error)
+	GetBusinessProfile(data *GetBusinessProfileStruct, instance *instance_model.Instance) (*types.BusinessProfile, error)
 }
 
 type userService struct {
@@ -96,6 +98,10 @@ type SetProfileNameStruct struct {
 
 type SetProfileStatusStruct struct {
 	Status string `json:"status"`
+}
+
+type GetBusinessProfileStruct struct {
+	Number string `json:"number"`
 }
 
 type PrivacyStruct struct {
@@ -510,6 +516,42 @@ func (u *userService) SetProfilePicture(data *SetProfilePictureStruct, instance 
 	}
 
 	return true, nil
+}
+
+// RemoveProfilePicture remove a foto de perfil da própria conta. O SDK
+// whatsmeow trata avatar==nil como "remover" (mesma chamada de SetGroupPhoto,
+// JID vazio = própria conta — mesmo truque já usado em SetProfilePicture).
+func (u *userService) RemoveProfilePicture(instance *instance_model.Instance) (bool, error) {
+	client, err := u.ensureClientConnected(instance.Id)
+	if err != nil {
+		return false, err
+	}
+
+	_, err = client.SetGroupPhoto(context.Background(), types.EmptyJID, nil)
+	if err != nil {
+		return false, err
+	}
+
+	return true, nil
+}
+
+func (u *userService) GetBusinessProfile(data *GetBusinessProfileStruct, instance *instance_model.Instance) (*types.BusinessProfile, error) {
+	client, err := u.ensureClientConnected(instance.Id)
+	if err != nil {
+		return nil, err
+	}
+
+	jid, ok := utils.ParseJID(data.Number)
+	if !ok {
+		return nil, errors.New("invalid phone number")
+	}
+
+	profile, err := client.GetBusinessProfile(context.Background(), jid)
+	if err != nil {
+		return nil, err
+	}
+
+	return profile, nil
 }
 
 func (u *userService) SetProfileName(data *SetProfileNameStruct, instance *instance_model.Instance) (bool, error) {
