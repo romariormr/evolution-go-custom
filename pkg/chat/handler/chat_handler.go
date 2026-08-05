@@ -16,6 +16,7 @@ type ChatHandler interface {
 	ChatMute(ctx *gin.Context)
 	ChatUnmute(ctx *gin.Context)
 	HistorySyncRequest(ctx *gin.Context)
+	FindMessages(ctx *gin.Context)
 }
 
 type chatHandler struct {
@@ -302,7 +303,7 @@ func (c *chatHandler) ChatUnmute(ctx *gin.Context) {
 // @Success 200 {object} gin.H "success"
 // @Failure 400 {object} gin.H "Error on validation"
 // @Failure 500 {object} gin.H "Internal server error"
-// @Router /chat/history-sync-request [post]
+// @Router /chat/history-sync [post]
 func (c *chatHandler) HistorySyncRequest(ctx *gin.Context) {
 	getInstance := ctx.MustGet("instance")
 
@@ -326,6 +327,56 @@ func (c *chatHandler) HistorySyncRequest(ctx *gin.Context) {
 	}
 
 	ctx.JSON(http.StatusOK, gin.H{"message": "success", "data": resp})
+}
+
+// Find messages by remoteJid, paginated
+// @Summary Find messages
+// @Description Lista mensagens recebidas de um remoteJid (numero/JID), paginado
+// @Tags Chat
+// @Accept json
+// @Produce json
+// @Param message body chat_service.FindMessagesStruct true "Filtro"
+// @Success 200 {object} gin.H "success"
+// @Failure 400 {object} gin.H "Error on validation"
+// @Failure 500 {object} gin.H "Internal server error"
+// @Router /chat/find-messages [post]
+func (c *chatHandler) FindMessages(ctx *gin.Context) {
+	getInstance := ctx.MustGet("instance")
+
+	instance, ok := getInstance.(*instance_model.Instance)
+	if !ok {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "instance not found"})
+		return
+	}
+
+	var data chat_service.FindMessagesStruct
+	if err := ctx.ShouldBindBodyWithJSON(&data); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	messages, total, err := c.chatService.FindMessages(&data, instance)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	page := data.Page
+	if page < 1 {
+		page = 1
+	}
+	limit := data.Limit
+	if limit < 1 || limit > 100 {
+		limit = 20
+	}
+
+	ctx.JSON(http.StatusOK, gin.H{
+		"message": "success",
+		"data":    messages,
+		"page":    page,
+		"limit":   limit,
+		"total":   total,
+	})
 }
 
 func NewChatHandler(

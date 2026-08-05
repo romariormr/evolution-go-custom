@@ -1120,11 +1120,20 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		// Keep a canonical per-chat activity index. Group metadata does not carry
 		// the last message timestamp, so this event is the authoritative source.
 		if mycli.config.DatabaseSaveMessages {
+			indexedText := evt.Message.GetConversation()
+			if indexedText == "" {
+				indexedText = evt.Message.GetExtendedTextMessage().GetText()
+			}
 			message := message_model.Message{
-				MessageID: evt.Info.ID,
-				Timestamp: evt.Info.Timestamp.Format("2006-01-02 15:04:05"),
-				Status:    "Received",
-				Source:    evt.Info.Chat.String(),
+				MessageID:  evt.Info.ID,
+				Timestamp:  evt.Info.Timestamp.Format("2006-01-02 15:04:05"),
+				Status:     "Received",
+				Source:     evt.Info.Chat.String(),
+				InstanceId: mycli.Instance.Id,
+				FromMe:     evt.Info.IsFromMe,
+				IsGroup:    evt.Info.IsGroup,
+				PushName:   evt.Info.PushName,
+				Content:    indexedText,
 			}
 			go func() {
 				if err := mycli.messageRepository.InsertMessage(message); err != nil {

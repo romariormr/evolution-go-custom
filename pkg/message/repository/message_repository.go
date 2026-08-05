@@ -14,6 +14,11 @@ type MessageRepository interface {
 	DeleteAllMessages() (int64, error)
 	GetLatestMessageID(source string) (string, string, error)
 	GetLatestMessages(sources []string) (map[string]message_model.Message, error)
+	// FindMessages lista mensagens de uma instância filtradas por remoteJid
+	// (chat), paginado. Só retorna mensagens RECEBIDAS com conteúdo indexado
+	// (ver whatsmeow.go, *events.Message) — mensagens enviadas via API não
+	// são gravadas aqui ainda.
+	FindMessages(instanceId, remoteJid string, page, limit int) ([]message_model.Message, int64, error)
 }
 
 // GetLatestMessages returns one latest row per source in a single query.
@@ -56,6 +61,29 @@ func (m *messageRepository) InsertMessage(message message_model.Message) error {
 		Columns:   []clause.Column{{Name: "message_id"}},
 		DoUpdates: clause.AssignmentColumns([]string{"timestamp", "status", "source"}),
 	}).Create(&message).Error
+}
+
+func (m *messageRepository) FindMessages(instanceId, remoteJid string, page, limit int) ([]message_model.Message, int64, error) {
+	query := m.db.Model(&message_model.Message{}).Where("instance_id = ?", instanceId)
+	if remoteJid != "" {
+		query = query.Where("source = ?", remoteJid)
+	}
+
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	var messages []message_model.Message
+	err := query.Order("timestamp DESC").
+		Offset((page - 1) * limit).
+		Limit(limit).
+		Find(&messages).Error
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return messages, total, nil
 }
 
 func (m *messageRepository) GetMessageByID(messageID string) (*message_model.Message, error) {
