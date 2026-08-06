@@ -1188,44 +1188,80 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 			return
 		}
 
-		// Trata o caso especial onde Sender é @lid e SenderAlt é @s.whatsapp.net
-		// Neste caso, devemos inverter: Sender e Chat devem ser @s.whatsapp.net, SenderAlt deve ser @lid
+		// ── Normalização LID → número ────────────────────────────────
+		// O WhatsApp está migrando o endereçamento de número
+		// (@s.whatsapp.net) para LID (@lid), um ID opaco que não expõe o
+		// telefone. Quem consome o webhook espera o número, então resolvemos
+		// o LID sempre que a informação estiver disponível.
+		//
+		// De onde sai o número, por cenário:
+		//   1. Recebida  → SenderAlt traz o número de quem enviou.
+		//   2. Enviada (IsFromMe) → SenderAlt vem VAZIO; o número do outro
+		//      lado está em RecipientAlt (só válido aqui: numa recebida,
+		//      RecipientAlt é o NOSSO próprio número, usar seria errado).
+		//   3. Nenhum dos dois → consulta o mapeamento LID↔número que o
+		//      whatsmeow mantém local (LIDStore, sem I/O de rede).
+		//
+		// Grupo/canal nunca tem Chat sobrescrito — Chat continua sendo o JID
+		// do próprio grupo (@g.us); só o Sender é resolvido.
+		// O LID não é descartado: sempre termina em SenderAlt.
 		senderStr := evt.Info.Sender.String()
-		senderAltStr := evt.Info.SenderAlt.String()
 		chatStr := evt.Info.Chat.String()
 
-		if strings.Contains(senderStr, "@lid") && strings.Contains(senderAltStr, "@s.whatsapp.net") {
-			mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Detected LID/WhatsApp JID swap case - Sender: %s, SenderAlt: %s", mycli.userID, senderStr, senderAltStr)
+		senderIsLid := evt.Info.Sender.Server == types.HiddenUserServer
+		chatIsLid := evt.Info.Chat.Server == types.HiddenUserServer
 
-			// Limpa os IDs antes de fazer a troca
-			cleanSenderAlt := cleanSenderID(senderAltStr)
-			cleanSender := cleanSenderID(senderStr)
+		if senderIsLid || chatIsLid {
+			originalSender := evt.Info.Sender
 
-			// Inverte: Sender e Chat recebem o @s.whatsapp.net, SenderAlt recebe o @lid
-			if cleanedWhatsAppJID, err := types.ParseJID(cleanSenderAlt); err == nil {
-				evt.Info.Sender = cleanedWhatsAppJID
-				// Se Chat também é @lid, atualiza para @s.whatsapp.net
-				if strings.Contains(chatStr, "@lid") {
-					evt.Info.Chat = cleanedWhatsAppJID
+			// Número de quem enviou.
+			var senderPN types.JID
+			if evt.Info.SenderAlt.Server == types.DefaultUserServer {
+				senderPN = evt.Info.SenderAlt.ToNonAD() // cenário 1
+			}
+			if senderPN.IsEmpty() && evt.Info.IsFromMe &&
+				mycli.WAClient != nil && mycli.WAClient.Store != nil && mycli.WAClient.Store.ID != nil {
+				senderPN = mycli.WAClient.Store.ID.ToNonAD() // cenário 2: fomos nós
+			}
+			if senderPN.IsEmpty() {
+				senderPN = mycli.resolveLidToPN(originalSender) // cenário 3
+			}
+
+			// Número do outro lado da conversa (somente DM).
+			var chatPN types.JID
+			if chatIsLid {
+				if evt.Info.IsFromMe {
+					if evt.Info.RecipientAlt.Server == types.DefaultUserServer {
+						chatPN = evt.Info.RecipientAlt.ToNonAD() // cenário 2
+					}
+				} else {
+					chatPN = senderPN // recebida: o chat é o próprio remetente
+				}
+				if chatPN.IsEmpty() {
+					chatPN = mycli.resolveLidToPN(evt.Info.Chat) // cenário 3
 				}
 			}
 
-			if cleanedLID, err := types.ParseJID(cleanSender); err == nil {
-				evt.Info.SenderAlt = cleanedLID
+			if !senderPN.IsEmpty() {
+				evt.Info.Sender = senderPN
+			}
+			if !chatPN.IsEmpty() {
+				evt.Info.Chat = chatPN
+			}
+			if senderIsLid {
+				evt.Info.SenderAlt = originalSender.ToNonAD()
 			}
 
-			mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] JID swap completed - New Sender: %s, New SenderAlt: %s, New Chat: %s",
-				mycli.userID, evt.Info.Sender.String(), evt.Info.SenderAlt.String(), evt.Info.Chat.String())
+			mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo(
+				"[%s] LID normalizado (fromMe=%v) - Sender: %s -> %s | Chat: %s -> %s",
+				mycli.userID, evt.Info.IsFromMe,
+				senderStr, evt.Info.Sender.String(),
+				chatStr, evt.Info.Chat.String())
 		} else {
-			// Comportamento normal: apenas limpa os IDs
-			cleanSender := cleanSenderID(senderStr)
-			if cleanedJID, err := types.ParseJID(cleanSender); err == nil {
-				evt.Info.Sender = cleanedJID
-			}
-
-			cleanSenderAlt := cleanSenderID(senderAltStr)
-			if cleanedLID, err := types.ParseJID(cleanSenderAlt); err == nil {
-				evt.Info.SenderAlt = cleanedLID
+			// Sem LID envolvido: só remove o sufixo de device (":12@...").
+			evt.Info.Sender = evt.Info.Sender.ToNonAD()
+			if !evt.Info.SenderAlt.IsEmpty() {
+				evt.Info.SenderAlt = evt.Info.SenderAlt.ToNonAD()
 			}
 		}
 
@@ -2864,15 +2900,31 @@ func (w *whatsmeowService) GetPollService() poll_service.PollService {
 	return w.pollService
 }
 
-// cleanSenderID remove a parte ":numero" do sender ID para exibir apenas o remoteJid correto
-// Exemplo: "557499879409:3@s.whatsapp.net" -> "557499879409@s.whatsapp.net"
-func cleanSenderID(senderID string) string {
-	// Procura pelo padrão ":numero" antes do @
-	if colonIndex := strings.Index(senderID, ":"); colonIndex != -1 {
-		if atIndex := strings.Index(senderID, "@"); atIndex != -1 && colonIndex < atIndex {
-			// Remove a parte ":numero" mantendo apenas o número principal e o domínio
-			return senderID[:colonIndex] + senderID[atIndex:]
-		}
+// resolveLidToPN descobre o número (@s.whatsapp.net) de um JID @lid usando o
+// mapeamento que o whatsmeow já mantém localmente (LIDStore) — consulta o
+// store local, não faz chamada de rede pro WhatsApp. Retorna JID vazio quando
+// o mapeamento ainda não é conhecido, cabendo ao chamador manter o LID nesse
+// caso (melhor devolver o LID do que um campo vazio).
+func (mycli *MyClient) resolveLidToPN(lid types.JID) types.JID {
+	if lid.Server != types.HiddenUserServer {
+		return types.EmptyJID
 	}
-	return senderID
+	if mycli.WAClient == nil || mycli.WAClient.Store == nil || mycli.WAClient.Store.LIDs == nil {
+		return types.EmptyJID
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	pn, err := mycli.WAClient.Store.LIDs.GetPNForLID(ctx, lid.ToNonAD())
+	if err != nil {
+		mycli.loggerWrapper.GetLogger(mycli.userID).LogWarn(
+			"[%s] não foi possível resolver o número do LID %s: %v", mycli.userID, lid.String(), err)
+		return types.EmptyJID
+	}
+	if pn.Server != types.DefaultUserServer {
+		return types.EmptyJID
+	}
+
+	return pn.ToNonAD()
 }
