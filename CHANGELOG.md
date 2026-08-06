@@ -1,5 +1,16 @@
 # Evolution GO - Changelog
 
+## v0.16.7
+
+### Fixes
+- **Webhook no longer leaks `@lid` instead of the phone number on messages you sent** — WhatsApp is migrating addressing from phone number (`@s.whatsapp.net`) to LID (`@lid`), an opaque id. The normalization in `myEventHandler` only covered one path: `Sender` is a LID *and* `SenderAlt` carries the number. On an `IsFromMe` message (the echo of a message sent from the phone/another device) `SenderAlt` comes back **empty**, so the condition never matched, the `else` branch just stripped the device suffix, and `Info.Chat`/`Info.Sender` reached the webhook as raw `@lid` — with no phone number anywhere the consumer would look for one. Confirmed against production logs: the old swap fired 2515 times in 6h for received messages (which did work) and never for `IsFromMe`.
+- Normalization now resolves the number from three sources, in order: `SenderAlt` (received messages, unchanged behaviour), `RecipientAlt` (only when `IsFromMe` — on a received message `RecipientAlt` is *our own* number, so using it there would be wrong), then the LID↔number mapping whatsmeow keeps locally (`Store.LIDs.GetPNForLID`, local store lookup, no network call to WhatsApp). `Info.Chat` now carries the phone number for both directions, so existing consumers reading `Info.Chat` work without changes.
+- Group and newsletter chats are untouched: `Info.Chat` stays the group JID (`@g.us`) and only `Info.Sender` is resolved. The LID is never discarded — it always ends up in `Info.SenderAlt`. When the mapping is genuinely unknown the LID is kept rather than emitting an empty field.
+
+### Improvements
+- Replaced the hand-rolled `cleanSenderID` string surgery with whatsmeow's own `JID.ToNonAD()` for stripping the device suffix (`:12@…`), and dropped the now-unused helper.
+- The LID path logs one line per message instead of two (it was ~5000 lines / 6h at INFO on a single busy instance).
+
 ## v0.16.6
 
 ### Fixes
