@@ -1,5 +1,13 @@
 # Evolution GO - Changelog
 
+## v0.16.8
+
+### Fixes
+- **`POST /send/button` printed the title twice on the phone** — the title was written into two places of the same `InteractiveMessage`: prefixed in bold at the top of the `Body` text (`body := "*" + data.Title + "*"`) *and* set as `Header.Title`. WhatsApp renders the header and the body as separate areas, so both showed up and the message opened with the title repeated on two lines before the description. `Body` now carries only the description; the title stays in the `Header` alone.
+- Also fixes a side effect of the old concatenation: with an empty title the body started with a stray `**`, and the trailing `\n` after the description added blank space above the buttons.
+- Guard kept for the case where only a title is supplied and no description: the title then becomes the body and the header is dropped, because an `InteractiveMessage` with an empty `Body` is rejected by WhatsApp. `/send/button` already requires `description` at the handler, so this only matters for callers using the service directly.
+- `POST /send/list` and `POST /send/carousel` were checked and are **not** affected — they map title/description to their own protobuf fields with no duplication.
+
 ## v0.16.7
 
 ### Fixes
