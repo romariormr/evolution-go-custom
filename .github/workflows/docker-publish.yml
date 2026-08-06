@@ -28,6 +28,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # A versão vem do arquivo VERSION, não de github.ref_name. Em push na
+      # main o ref_name é literalmente "main", então a imagem :latest saía
+      # reportando "Starting Evolution GO version main" — inútil pra saber o
+      # que está rodando. O arquivo VERSION dá o mesmo número tanto no build
+      # da main quanto no da tag.
+      - name: Versão (arquivo VERSION)
+        id: ver
+        run: echo "version=$(tr -d '[:space:]' < VERSION)" >> "$GITHUB_OUTPUT"
+
       - name: Metadados (tags por versão)
         id: meta
         uses: docker/metadata-action@v5
@@ -36,6 +45,7 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ steps.ver.outputs.version }},enable={{is_default_branch}}
             type=sha,prefix=sha-
 
       - name: Build e push
@@ -48,4 +58,22 @@ jobs:
             ${{ steps.meta.outputs.labels }}
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
           build-args: |
-            VERSION=${{ github.ref_name }}
+            VERSION=${{ steps.ver.outputs.version }}
+
+      - name: Resumo do que foi publicado
+        run: |
+          {
+            echo "### Imagem publicada"
+            echo ""
+            echo "**Versão:** \`${{ steps.ver.outputs.version }}\` — **commit:** \`${GITHUB_SHA::7}\`"
+            echo ""
+            echo "Tags:"
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+            echo ""
+            echo "Pull (imagem pública, sem login):"
+            echo '```bash'
+            echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
