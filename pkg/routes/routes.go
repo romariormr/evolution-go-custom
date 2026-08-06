@@ -195,7 +195,10 @@ func (r *Routes) AssignRoutes(eng *gin.Engine) {
 			routes.POST("/description", r.jidValidationMiddleware.ValidateNumberField(), r.groupHandler.SetGroupDescription)
 			routes.POST("/settings", r.jidValidationMiddleware.ValidateNumberField(), r.groupHandler.UpdateGroupSettings)
 			routes.POST("/create", r.jidValidationMiddleware.ValidateMultipleNumbers("participants"), r.groupHandler.CreateGroup)
-			routes.POST("/participant", r.jidValidationMiddleware.ValidateJIDFields("number", "participants"), r.groupHandler.UpdateParticipant)
+			// AddParticipantStruct usa "groupJid", não "number" — validar "number"
+			// aqui era no-op (campo nunca existe no body) e deixava groupJid sem
+			// normalização.
+			routes.POST("/participant", r.jidValidationMiddleware.ValidateJIDFields("groupJid", "participants"), r.groupHandler.UpdateParticipant)
 			routes.GET("/myall", r.groupHandler.GetMyGroups) // TODO: not working
 			routes.POST("/join", r.groupHandler.JoinGroupLink)
 			routes.POST("/leave", r.jidValidationMiddleware.ValidateNumberField(), r.groupHandler.LeaveGroup)

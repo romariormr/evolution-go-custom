@@ -1,5 +1,15 @@
 # Evolution GO - Changelog
 
+## v0.16.6
+
+### Fixes
+- **`POST /group/participant` works again** — `ValidateJIDFields` only handled string fields. For an array field such as `participants`, the `value.(string)` assertion failed and `strValue` got the zero value `""`, which then matched the `else if strValue == ""` branch: every request was rejected with `participants is required and cannot be empty` before the handler ran. No participant format worked (bare number, `@c.us`, `@s.whatsapp.net`) because the content was never read at all. The middleware now uses a type switch with `string` and `[]interface{}` branches plus a `default` that returns an explicit 400 for an invalid type. Array items are validated and normalized individually, matching what `ValidateMultipleNumbers` already did for `/group/create`.
+- **`/group/participant` validated a field that does not exist** — the route asked for validation of `number`, but `AddParticipantStruct` uses `groupJid`. Since `number` is never present in the body, validation was a silent no-op and `groupJid` was never normalized. Changed to `ValidateJIDFields("groupJid", "participants")`.
+
+### Known issues (not fixed here)
+- The same non-existent-field pattern remains on 7 `/group` routes (`info`, `invitelink`, `photo`, `name`, `description`, `settings`, `leave` — all ask for `number` while their structs use `groupJid`) and on `/community/add` + `/community/remove` (ask for `number`/`communityId` while the struct uses `communityJid`/`groupJid`). JID validation is therefore a no-op on those 9 routes. Deliberately left alone: enabling validation where there is none today can introduce a 400 in flows that currently work, so it needs its own change plus tests.
+- This CHANGELOG has no entries for v0.12.0 through v0.16.5. Note that `Makefile` derives its version from `grep -om1 "v[0-9].*" CHANGELOG.md`, so a `make`-driven build stamps the topmost entry here — keep it in sync with the `VERSION` file.
+
 ## v0.11.2
 
 ### Fixes
