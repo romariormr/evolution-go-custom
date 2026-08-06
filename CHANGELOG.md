@@ -11,6 +11,12 @@
 - Replaced the hand-rolled `cleanSenderID` string surgery with whatsmeow's own `JID.ToNonAD()` for stripping the device suffix (`:12@…`), and dropped the now-unused helper.
 - The LID path logs one line per message instead of two (it was ~5000 lines / 6h at INFO on a single busy instance).
 
+### CI/CD
+- **Image version no longer stamps as `main`** — the build passed `VERSION=${{ github.ref_name }}`, which on a push to the default branch is literally the string `main`, so anything running the `:latest` image reported `Starting Evolution GO version main`. The build arg now comes from the `VERSION` file, so the same number is stamped whether the image was built from a branch push or from a `v*` tag.
+- Pushes to `main` now also publish the plain version tag (e.g. `0.16.7`) alongside `latest` and `sha-…`, so a specific build can be pinned without waiting for a release tag.
+- The workflow writes a job summary with the published version, commit and the ready-to-use `docker pull` line.
+- **New `deploy/docker-compose.selfhost.yml`** — plain Compose (no Swarm) stack for running this project in another environment straight from the published image: `evolution-go` + `postgres` + `watchtower` for auto-update. The GHCR package is public, so the pull needs no `docker login`; only `GLOBAL_API_KEY` and `DB_PASSWORD` have to be supplied via `.env`.
+
 ## v0.16.6
 
 ### Fixes

@@ -1,0 +1,102 @@
+# Evolution GO — stack self-hosted (Docker Compose puro, sem Swarm)
+#
+# Pra que serve: rodar o mesmo projeto em outro ambiente (servidor de casa,
+# VPS, etc) puxando a imagem já publicada no GitHub Container Registry. Não
+# precisa clonar o repositório nem buildar nada — a imagem é PÚBLICA, o pull
+# funciona sem docker login.
+#
+#   docker compose -f docker-compose.selfhost.yml up -d
+#
+# Antes de subir, crie um .env ao lado deste arquivo:
+#
+#   GLOBAL_API_KEY=<gere um uuid, ex: uuidgen>
+#   DB_PASSWORD=<uma senha forte só pro postgres deste ambiente>
+#
+# O container atualiza sozinho: o watchtower checa o :latest no ghcr a cada
+# 5 min e recria o container quando sai versão nova (só nos serviços marcados
+# com a label watchtower.enable=true, por isso o postgres nunca é tocado).
+
+services:
+  evolution-go:
+    image: ghcr.io/romariormr/evolution-go-custom:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      # Só na interface local por padrão. Pra expor pra fora, troque por
+      # "4000:4000" e coloque um proxy reverso com TLS na frente — a API
+      # autentica por apikey em texto puro, não exponha sem HTTPS.
+      - "127.0.0.1:4000:4000"
+    environment:
+      SERVER_PORT: "4000"
+      CLIENT_NAME: "evolution-go"
+      GLOBAL_API_KEY: "${GLOBAL_API_KEY:?defina GLOBAL_API_KEY no .env}"
+
+      # O app cria os bancos automaticamente se não existirem.
+      POSTGRES_AUTH_DB: "postgresql://evogo:${DB_PASSWORD:?defina DB_PASSWORD no .env}@postgres:5432/evogo_auth?sslmode=disable"
+      POSTGRES_USERS_DB: "postgresql://evogo:${DB_PASSWORD}@postgres:5432/evogo_users?sslmode=disable"
+
+      DATABASE_SAVE_MESSAGES: "true"
+      CONNECT_ON_STARTUP: "true"
+      WEBHOOK_FILES: "true"
+      LOGTYPE: "console"
+      WADEBUG: "INFO"
+      LOG_DIRECTORY: "/app/logs"
+      OS_NAME: "Linux"
+
+      # MinIO desligado: sem storage externo, a mídia recebida chega no
+      # webhook em base64. Simples, mas o payload fica grande em vídeo/áudio
+      # — se isso incomodar, suba um MinIO e ligue MINIO_ENABLED=true.
+      MINIO_ENABLED: "false"
+
+      AMQP_GLOBAL_ENABLED: "false"
+      NATS_GLOBAL_ENABLED: "false"
+      EVENT_IGNORE_GROUP: "false"
+      EVENT_IGNORE_STATUS: "true"
+      QRCODE_MAX_COUNT: "5"
+      CHECK_USER_EXISTS: "true"
+      MESSAGE_SECRETS_RETENTION_DAYS: "30"
+    volumes:
+      - evolution_go_data:/app/dbdata
+      - evolution_go_logs:/app/logs
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:4000/server/ok"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "evogo"
+      POSTGRES_PASSWORD: "${DB_PASSWORD:?defina DB_PASSWORD no .env}"
+      # Base inicial; evogo_auth e evogo_users são criados pelo app.
+      POSTGRES_DB: "postgres"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U evogo"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Auto-update: puxa o :latest do ghcr e recria o container quando muda.
+  # ATENÇÃO: monta o socket do Docker, o que equivale a root no host. É o
+  # preço de qualquer auto-updater; se não quiser isso, remova este serviço e
+  # atualize na mão com `docker compose pull && docker compose up -d`.
+  watchtower:
+    image: containrrr/watchtower:latest
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: --interval 300 --cleanup --label-enable
+
+volumes:
+  evolution_go_data:
+  evolution_go_logs:
+  postgres_data:
