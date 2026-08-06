@@ -1813,13 +1813,19 @@ func (s *sendService) SendButton(data *ButtonStruct, instance *instance_model.In
 			},
 		}
 	} else {
-		body := func() string {
-			t := "*" + data.Title + "*"
-			if data.Description != "" {
-				t += "\n\n" + data.Description + "\n"
-			}
-			return t
-		}()
+		// O título vai SÓ no Header (mais abaixo). Antes ele também era
+		// prefixado em negrito aqui no Body, e o WhatsApp renderiza as duas
+		// áreas — o título aparecia duplicado na tela do celular.
+		body := data.Description
+		useHeader := data.Title != ""
+		if body == "" {
+			// InteractiveMessage sem Body é rejeitada pelo WhatsApp. Sem
+			// descrição, o título assume o corpo (e aí não se repete no
+			// Header). O handler de /send/button já exige description, isso
+			// aqui é só pra quem chamar o serviço direto.
+			body = data.Title
+			useHeader = false
+		}
 
 		interactiveMsg := &waE2E.InteractiveMessage{
 			Body: &waE2E.InteractiveMessage_Body{
@@ -1843,7 +1849,7 @@ func (s *sendService) SendButton(data *ButtonStruct, instance *instance_model.In
 		}
 
 		// Header with title
-		if data.Title != "" {
+		if useHeader {
 			interactiveMsg.Header = &waE2E.InteractiveMessage_Header{
 				Title:              proto.String(data.Title),
 				HasMediaAttachment: proto.Bool(false),
