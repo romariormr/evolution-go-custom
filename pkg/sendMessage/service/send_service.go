@@ -933,6 +933,57 @@ func convertAudioToOpusWithDuration(inputData []byte) ([]byte, int, error) {
 	return convertedData, duration, nil
 }
 
+// gerarThumbnail devolve uma miniatura JPEG de 72px de largura, ou nil.
+//
+// Sem esse campo no protobuf o WhatsApp desenha um placeholder cinza com botão de
+// download em vez da imagem. Em grupo passa despercebido porque o download
+// automático do aparelho resolve; em canal (@newsletter) não há download
+// automático, então a imagem simplesmente não aparece.
+//
+// nil é resultado válido e esperado: JPEGThumbnail é campo opcional e a mensagem
+// segue normalmente sem ele. Todo erro aqui vira nil silencioso de propósito —
+// imagem sem miniatura é aceitável, imagem que não envia é regressão.
+//
+// Formatos: JPEG/PNG/GIF vêm do stdlib; WebP funciona porque github.com/chai2010/webp
+// (importado no topo) registra seu decoder no image.Decode — verificado. Vídeo NÃO
+// decodifica: image.Decode não lê container MP4, então vídeo sempre retorna nil aqui.
+// Miniatura de vídeo exigiria extrair um frame com ffmpeg.
+func gerarThumbnail(fileData []byte) []byte {
+	img, _, err := image.Decode(bytes.NewReader(fileData))
+	if err != nil {
+		return nil
+	}
+
+	bounds := img.Bounds()
+	// Guarda contra imagem degenerada: Dx()==0 faria a divisão abaixo virar +Inf e
+	// o int() resultante alocar um RGBA absurdo.
+	if bounds.Dx() < 1 || bounds.Dy() < 1 {
+		return nil
+	}
+
+	const thumbWidth = 72
+	thumbHeight := int(float64(bounds.Dy()) * float64(thumbWidth) / float64(bounds.Dx()))
+	if thumbHeight < 1 {
+		thumbHeight = 1
+	}
+
+	thumbImg := image.NewRGBA(image.Rect(0, 0, thumbWidth, thumbHeight))
+	for y := 0; y < thumbHeight; y++ {
+		for x := 0; x < thumbWidth; x++ {
+			srcX := x * bounds.Dx() / thumbWidth
+			srcY := y * bounds.Dy() / thumbHeight
+			thumbImg.Set(x, y, img.At(srcX+bounds.Min.X, srcY+bounds.Min.Y))
+		}
+	}
+
+	var thumbBuf bytes.Buffer
+	if err := jpeg.Encode(&thumbBuf, thumbImg, &jpeg.Options{Quality: 50}); err != nil {
+		return nil
+	}
+
+	return thumbBuf.Bytes()
+}
+
 func (s *sendService) SendMediaFile(data *MediaStruct, fileData []byte, instance *instance_model.Instance) (*MessageSendStruct, error) {
 	return s.sendMediaFileWithRetry(data, fileData, instance, 3)
 }
@@ -1024,6 +1075,13 @@ func (s *sendService) sendMediaFileWithRetry(data *MediaStruct, fileData []byte,
 
 		s.loggerWrapper.GetLogger(instance.Id).LogInfo("[%s] Media uploaded with size %d", instance.Id, uploaded.FileLength)
 
+		// Miniatura embutida na mensagem (ver gerarThumbnail). Só imagem e vídeo
+		// têm o campo; vídeo hoje sempre volta nil porque image.Decode não lê MP4.
+		var jpegThumb []byte
+		if data.Type == "image" || data.Type == "video" {
+			jpegThumb = gerarThumbnail(fileData)
+		}
+
 		var media *waE2E.Message
 		var mediaType string
 
@@ -1032,12 +1090,13 @@ func (s *sendService) sendMediaFileWithRetry(data *MediaStruct, fileData []byte,
 			if isNewsletter {
 				// Newsletter: SEM MediaKey e FileEncSHA256
 				media = &waE2E.Message{ImageMessage: &waE2E.ImageMessage{
-					Caption:    proto.String(data.Caption),
-					URL:        &uploaded.URL,
-					DirectPath: &uploaded.DirectPath,
-					Mimetype:   proto.String(mimeType),
-					FileSHA256: uploaded.FileSHA256,
-					FileLength: &uploaded.FileLength,
+					Caption:       proto.String(data.Caption),
+					URL:           &uploaded.URL,
+					DirectPath:    &uploaded.DirectPath,
+					Mimetype:      proto.String(mimeType),
+					FileSHA256:    uploaded.FileSHA256,
+					FileLength:    &uploaded.FileLength,
+					JPEGThumbnail: jpegThumb,
 				}}
 			} else {
 				// Normal: COM MediaKey e FileEncSHA256
@@ -1050,18 +1109,20 @@ func (s *sendService) sendMediaFileWithRetry(data *MediaStruct, fileData []byte,
 					FileEncSHA256: uploaded.FileEncSHA256,
 					FileSHA256:    uploaded.FileSHA256,
 					FileLength:    proto.Uint64(uint64(len(fileData))),
+					JPEGThumbnail: jpegThumb,
 				}}
 			}
 			mediaType = "ImageMessage"
 		case "video":
 			if isNewsletter {
 				media = &waE2E.Message{VideoMessage: &waE2E.VideoMessage{
-					Caption:    proto.String(data.Caption),
-					URL:        &uploaded.URL,
-					DirectPath: &uploaded.DirectPath,
-					Mimetype:   proto.String(mimeType),
-					FileSHA256: uploaded.FileSHA256,
-					FileLength: &uploaded.FileLength,
+					Caption:       proto.String(data.Caption),
+					URL:           &uploaded.URL,
+					DirectPath:    &uploaded.DirectPath,
+					Mimetype:      proto.String(mimeType),
+					FileSHA256:    uploaded.FileSHA256,
+					FileLength:    &uploaded.FileLength,
+					JPEGThumbnail: jpegThumb,
 				}}
 			} else {
 				media = &waE2E.Message{VideoMessage: &waE2E.VideoMessage{
@@ -1073,6 +1134,7 @@ func (s *sendService) sendMediaFileWithRetry(data *MediaStruct, fileData []byte,
 					FileEncSHA256: uploaded.FileEncSHA256,
 					FileSHA256:    uploaded.FileSHA256,
 					FileLength:    proto.Uint64(uint64(len(fileData))),
+					JPEGThumbnail: jpegThumb,
 				}}
 			}
 			mediaType = "VideoMessage"
@@ -1308,6 +1370,13 @@ func (s *sendService) sendMediaUrlWithRetry(data *MediaStruct, instance *instanc
 		}
 		s.loggerWrapper.GetLogger(instance.Id).LogInfo("[%s] Upload concluído em %v. Tamanho: %d", instance.Id, time.Since(uploadStart), uploaded.FileLength)
 
+		// Miniatura embutida na mensagem (ver gerarThumbnail). Só imagem e vídeo
+		// têm o campo; vídeo hoje sempre volta nil porque image.Decode não lê MP4.
+		var jpegThumb []byte
+		if data.Type == "image" || data.Type == "video" {
+			jpegThumb = gerarThumbnail(fileData)
+		}
+
 		var media *waE2E.Message
 		var mediaType string
 
@@ -1316,12 +1385,13 @@ func (s *sendService) sendMediaUrlWithRetry(data *MediaStruct, instance *instanc
 			if isNewsletter {
 				// Newsletter: sem criptografia (sem MediaKey e FileEncSHA256)
 				media = &waE2E.Message{ImageMessage: &waE2E.ImageMessage{
-					Caption:    proto.String(data.Caption),
-					URL:        &uploaded.URL,
-					DirectPath: &uploaded.DirectPath,
-					Mimetype:   proto.String(mimeType),
-					FileSHA256: uploaded.FileSHA256,
-					FileLength: &uploaded.FileLength,
+					Caption:       proto.String(data.Caption),
+					URL:           &uploaded.URL,
+					DirectPath:    &uploaded.DirectPath,
+					Mimetype:      proto.String(mimeType),
+					FileSHA256:    uploaded.FileSHA256,
+					FileLength:    &uploaded.FileLength,
+					JPEGThumbnail: jpegThumb,
 				}}
 			} else {
 				// Normal: com criptografia
@@ -1334,18 +1404,20 @@ func (s *sendService) sendMediaUrlWithRetry(data *MediaStruct, instance *instanc
 					FileEncSHA256: uploaded.FileEncSHA256,
 					FileSHA256:    uploaded.FileSHA256,
 					FileLength:    proto.Uint64(uint64(len(fileData))),
+					JPEGThumbnail: jpegThumb,
 				}}
 			}
 			mediaType = "ImageMessage"
 		case "video":
 			if isNewsletter {
 				media = &waE2E.Message{VideoMessage: &waE2E.VideoMessage{
-					Caption:    proto.String(data.Caption),
-					URL:        &uploaded.URL,
-					DirectPath: &uploaded.DirectPath,
-					Mimetype:   proto.String(mimeType),
-					FileSHA256: uploaded.FileSHA256,
-					FileLength: &uploaded.FileLength,
+					Caption:       proto.String(data.Caption),
+					URL:           &uploaded.URL,
+					DirectPath:    &uploaded.DirectPath,
+					Mimetype:      proto.String(mimeType),
+					FileSHA256:    uploaded.FileSHA256,
+					FileLength:    &uploaded.FileLength,
+					JPEGThumbnail: jpegThumb,
 				}}
 			} else {
 				media = &waE2E.Message{VideoMessage: &waE2E.VideoMessage{
@@ -1357,6 +1429,7 @@ func (s *sendService) sendMediaUrlWithRetry(data *MediaStruct, instance *instanc
 					FileEncSHA256: uploaded.FileEncSHA256,
 					FileSHA256:    uploaded.FileSHA256,
 					FileLength:    proto.Uint64(uint64(len(fileData))),
+					JPEGThumbnail: jpegThumb,
 				}}
 			}
 			mediaType = "VideoMessage"
@@ -2585,42 +2658,17 @@ func (s *sendService) SendCarousel(data *CarouselStruct, instance *instance_mode
 					if err == nil {
 						uploaded, err := client.Upload(context.Background(), fileData, whatsmeow.MediaImage)
 						if err == nil {
-							// Generate JPEG thumbnail for iOS compatibility
-							var jpegThumb []byte
-							img, _, decErr := image.Decode(bytes.NewReader(fileData))
-							if decErr == nil {
-								// Resize to 72px thumbnail
-								bounds := img.Bounds()
-								thumbWidth := 72
-								thumbHeight := int(float64(bounds.Dy()) * float64(thumbWidth) / float64(bounds.Dx()))
-								if thumbHeight < 1 {
-									thumbHeight = 1
-								}
-								thumbImg := image.NewRGBA(image.Rect(0, 0, thumbWidth, thumbHeight))
-								for y := 0; y < thumbHeight; y++ {
-									for x := 0; x < thumbWidth; x++ {
-										srcX := x * bounds.Dx() / thumbWidth
-										srcY := y * bounds.Dy() / thumbHeight
-										thumbImg.Set(x, y, img.At(srcX+bounds.Min.X, srcY+bounds.Min.Y))
-									}
-								}
-								var thumbBuf bytes.Buffer
-								if jpeg.Encode(&thumbBuf, thumbImg, &jpeg.Options{Quality: 50}) == nil {
-									jpegThumb = thumbBuf.Bytes()
-								}
-							}
-
 							header.HasMediaAttachment = proto.Bool(true)
 							header.Media = &waE2E.InteractiveMessage_Header_ImageMessage{
 								ImageMessage: &waE2E.ImageMessage{
-									URL:            proto.String(uploaded.URL),
-									DirectPath:     proto.String(uploaded.DirectPath),
-									MediaKey:       uploaded.MediaKey,
-									Mimetype:       proto.String("image/jpeg"),
-									FileEncSHA256:  uploaded.FileEncSHA256,
-									FileSHA256:     uploaded.FileSHA256,
-									FileLength:     proto.Uint64(uint64(len(fileData))),
-									JPEGThumbnail:  jpegThumb,
+									URL:           proto.String(uploaded.URL),
+									DirectPath:    proto.String(uploaded.DirectPath),
+									MediaKey:      uploaded.MediaKey,
+									Mimetype:      proto.String("image/jpeg"),
+									FileEncSHA256: uploaded.FileEncSHA256,
+									FileSHA256:    uploaded.FileSHA256,
+									FileLength:    proto.Uint64(uint64(len(fileData))),
+									JPEGThumbnail: gerarThumbnail(fileData),
 								},
 							}
 						}
@@ -2908,6 +2956,13 @@ func (s *sendService) sendStatusMedia(client *whatsmeow.Client, data *StatusMedi
 
 	s.loggerWrapper.GetLogger(instance.Id).LogInfo("[%s] Status media uploaded, size: %d", instance.Id, uploaded.FileLength)
 
+	// Status/stories sofre do mesmo placeholder cinza que canal quando falta a
+	// miniatura (ver gerarThumbnail).
+	var jpegThumb []byte
+	if data.Type == "image" || data.Type == "video" {
+		jpegThumb = gerarThumbnail(fileData)
+	}
+
 	var media *waE2E.Message
 	var mediaType string
 
@@ -2922,6 +2977,7 @@ func (s *sendService) sendStatusMedia(client *whatsmeow.Client, data *StatusMedi
 			FileEncSHA256: uploaded.FileEncSHA256,
 			FileSHA256:    uploaded.FileSHA256,
 			FileLength:    proto.Uint64(uint64(len(fileData))),
+			JPEGThumbnail: jpegThumb,
 		}}
 		mediaType = "ImageMessage"
 	case "video":
@@ -2934,6 +2990,7 @@ func (s *sendService) sendStatusMedia(client *whatsmeow.Client, data *StatusMedi
 			FileEncSHA256: uploaded.FileEncSHA256,
 			FileSHA256:    uploaded.FileSHA256,
 			FileLength:    proto.Uint64(uint64(len(fileData))),
+			JPEGThumbnail: jpegThumb,
 		}}
 		mediaType = "VideoMessage"
 	}

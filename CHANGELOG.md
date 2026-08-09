@@ -1,5 +1,19 @@
 # Evolution GO - Changelog
 
+## v0.16.9
+
+### Fixes
+- **Images sent to a channel showed a grey placeholder instead of the picture** — media messages went out with no `JPEGThumbnail`, so WhatsApp drew a download box rather than rendering the image. In a group it went unnoticed because the phone's auto-download fills it in; a channel (`@newsletter`) has no auto-download, so the image simply never appeared. Both `sendMediaFileWithRetry` (file/base64) and `sendMediaUrlWithRetry` (by URL) build their messages independently, and each has a newsletter and a normal variant — all 8 construction points now set the thumbnail, plus 2 in `sendStatusMedia` (status/stories had the same defect, outside the original scope).
+- Thumbnail generation is centralised in a new `gerarThumbnail` helper (72px wide, aspect preserved, JPEG quality 50 — measured at 1.2–1.3 KB). The logic already existed inline inside the carousel builder; the carousel now calls the helper, removing the duplicate.
+- Failures are swallowed on purpose: a broken/404/truncated image, or any video, returns `nil` and the message is sent without a thumbnail. `JPEGThumbnail` is an optional protobuf field, so that is exactly the previous behaviour — a missing thumbnail is acceptable degradation, a send that fails would be a regression.
+- Added a guard the original inline code lacked: a decoded image reporting zero width would make the aspect-ratio division produce `+Inf` and the resulting `int` allocate an absurd buffer.
+
+### Notes
+- **Video still has no thumbnail** (returns `nil`): `image.Decode` cannot read an MP4 container. Generating one requires extracting a frame with ffmpeg — deliberately left out so it would not hold up the image fix.
+- **WebP works.** Verified empirically that `github.com/chai2010/webp` registers its decoder with `image.Decode` (`format="webp"`), so WebP sources produce thumbnails like JPEG/PNG.
+- First test file in the repo: `pkg/sendMessage/service/thumbnail_test.go` covers JPEG/PNG/WebP/1x1/panoramic plus the nil-on-garbage contract (404 HTML, MP4, empty, nil, truncated), so a future refactor cannot turn a decode failure back into a failed send.
+- Pre-existing and untouched: `SendLink` passes the full downloaded image as `JPEGThumbnail` instead of a resized one, which can put megabytes in the field. Worth a separate look.
+
 ## v0.16.8
 
 ### Fixes
