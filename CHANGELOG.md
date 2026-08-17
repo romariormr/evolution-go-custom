@@ -1,5 +1,21 @@
 # Evolution GO - Changelog
 
+## v0.16.10
+
+### Improvements
+- **`GET /polls/{id}/results` agora devolve o TEXTO das opções, não só o hash.** O voto do WhatsApp só carrega o SHA-256 do texto da opção, então o endpoint respondia `optionCounts: { "<hash>": 4 }` — ilegível. Agora a resposta traz `options[]` com `{ name, hash, count, percentage, known }`, `question`, `totalVoters` e `voters[].selectedOptionNames`. Ordenado por mais votada.
+- **Como o texto é recuperado (híbrido):** no envio, `POST /send/poll` passa a gravar as opções (texto + hash) numa tabela nova `poll_options` (criada sozinha no boot, via auto-migração — best-effort, não impede o envio). No results, faz o join hash→texto. Para enquetes enviadas antes desta versão, o chamador pode passar as opções no query — `?options=Sim|Não` ou repetido `?option=Sim&option=Não` — que o backend calcula o mesmo SHA-256 e rotula. As opções do query também sobrepõem/completam o que estiver gravado.
+- **Opções com zero voto agora aparecem** (antes sumiam), com `count: 0`. Percentual é sobre o total de votantes.
+- `known: false` marca votos para uma opção que não conseguimos rotular (ex.: enquete antiga sem registro e sem `?options`) — o hash ainda vem, então nada se perde.
+- O hashing foi confirmado empiricamente contra votos reais em produção: `sha256("Sim")`, `sha256("SIM")` e `sha256("NÃO")` batem com os hashes armazenados (case-sensitive, acento/emoji preservados).
+
+### Fixes
+- Removido o `fmt.Printf("[POLL DEBUG] ...")` que imprimia no stdout a cada voto recebido (ruído em produção, 5 linhas por voto).
+
+### Notes
+- `totalVotes` foi mantido (== `totalVoters`, uma linha por votante) por compatibilidade; `optionCounts` (hash→count) também continua na resposta.
+- Enquete com 0 voto mas com opções conhecidas agora responde **200** (mostra as opções zeradas) em vez de 404. O 404 fica só quando não há nem voto nem opção para exibir.
+
 ## v0.16.9
 
 ### Fixes

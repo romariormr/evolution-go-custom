@@ -3,6 +3,7 @@ package poll_handler
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	logger_wrapper "github.com/EvolutionAPI/evolution-go/pkg/logger"
 	poll_model "github.com/EvolutionAPI/evolution-go/pkg/poll/model"
@@ -77,10 +78,22 @@ func (h *PollHandler) GetPollResults(c *gin.Context) {
 		return
 	}
 
+	// Opções informadas pelo chamador para rotular os hashes dos votos, quando a
+	// enquete não tem definição guardada (ex.: enviada antes desta versão).
+	// Aceita repetido (?option=A&option=B) e separado por barra (?options=A|B).
+	providedOptions := append([]string{}, c.QueryArray("option")...)
+	if raw := c.Query("options"); raw != "" {
+		for _, part := range strings.Split(raw, "|") {
+			if p := strings.TrimSpace(part); p != "" {
+				providedOptions = append(providedOptions, p)
+			}
+		}
+	}
+
 	h.loggerWrapper.GetLogger("poll-handler").LogInfo("[POLL] Fetching results for poll %s (instance: %s)", pollMessageID, instanceID)
 
 	// Buscar resultados do banco
-	results, err := h.pollService.GetPollResults(c.Request.Context(), pollMessageID, instanceID)
+	results, err := h.pollService.GetPollResults(c.Request.Context(), pollMessageID, instanceID, providedOptions)
 	if err != nil {
 		h.loggerWrapper.GetLogger("poll-handler").LogError("[POLL] Error fetching results: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -89,15 +102,17 @@ func (h *PollHandler) GetPollResults(c *gin.Context) {
 		return
 	}
 
-	if results.TotalVotes == 0 {
-		h.loggerWrapper.GetLogger("poll-handler").LogInfo("[POLL] No votes found for poll %s", pollMessageID)
+	// 404 só quando não há NADA para mostrar: nem voto, nem opção conhecida
+	// (definição guardada ou informada no query).
+	if results.TotalVoters == 0 && len(results.Options) == 0 {
+		h.loggerWrapper.GetLogger("poll-handler").LogInfo("[POLL] Nothing to show for poll %s", pollMessageID)
 		c.JSON(http.StatusNotFound, gin.H{
-			"error":   "No votes found for this poll",
-			"message": "This poll has no votes yet, or the pollMessageId is incorrect",
+			"error":   "No votes or options found for this poll",
+			"message": "Esta enquete ainda não tem votos e não há opções registradas. Envie a enquete por esta versão ou passe ?options=A|B para rotular.",
 		})
 		return
 	}
 
-	h.loggerWrapper.GetLogger("poll-handler").LogInfo("[POLL] Returning %d votes for poll %s", results.TotalVotes, pollMessageID)
+	h.loggerWrapper.GetLogger("poll-handler").LogInfo("[POLL] Returning poll %s: %d voter(s), %d option(s)", pollMessageID, results.TotalVoters, len(results.Options))
 	c.JSON(http.StatusOK, results)
 }

@@ -2,8 +2,12 @@ package poll_service
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
+	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -19,8 +23,25 @@ type PollService interface {
 	// SavePollVote salva um voto de enquete no banco de dados
 	SavePollVote(ctx context.Context, vote *model.PollVote) error
 
-	// GetPollResults retorna os resultados de uma enquete
-	GetPollResults(ctx context.Context, pollMessageID string, instanceID string) (*model.PollResults, error)
+	// SavePollDefinition guarda a pergunta e as opções de uma enquete no momento
+	// do envio, para depois traduzir os hashes dos votos de volta para o texto.
+	// Best-effort: uma falha aqui não deve impedir o envio da enquete.
+	SavePollDefinition(ctx context.Context, instanceID, pollMessageID, chatJid, question string, options []string) error
+
+	// GetPollResults retorna os resultados de uma enquete. providedOptions é
+	// opcional: se o chamador informar os textos das opções, eles são usados
+	// (e sobrepõem) para rotular os hashes — útil para enquetes enviadas antes
+	// de existir o registro de definições.
+	GetPollResults(ctx context.Context, pollMessageID, instanceID string, providedOptions []string) (*model.PollResults, error)
+}
+
+// hashOption reproduz o hash que o WhatsApp usa no voto: SHA-256 do texto da
+// opção (bytes UTF-8, sem normalização). Confirmado empiricamente contra votos
+// reais: sha256("Sim"), sha256("SIM") e sha256("NÃO") batem com os hashes
+// armazenados — logo é case-sensitive e preserva acento/emoji.
+func hashOption(name string) string {
+	sum := sha256.Sum256([]byte(name))
+	return hex.EncodeToString(sum[:])
 }
 
 type pollService struct {
@@ -67,6 +88,19 @@ func (s *pollService) autoMigrate() error {
 		CREATE INDEX IF NOT EXISTS idx_poll_votes_poll_message ON poll_votes(poll_message_id);
 		CREATE INDEX IF NOT EXISTS idx_poll_votes_chat ON poll_votes(poll_chat_jid);
 		CREATE INDEX IF NOT EXISTS idx_poll_votes_voter ON poll_votes(voter_jid);
+
+		CREATE TABLE IF NOT EXISTS poll_options (
+			poll_message_id VARCHAR(255) NOT NULL,
+			instance_id VARCHAR(255) NOT NULL,
+			question TEXT NOT NULL DEFAULT '',
+			option_index INT NOT NULL DEFAULT 0,
+			option_name TEXT NOT NULL,
+			option_hash VARCHAR(64) NOT NULL,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			CONSTRAINT unique_poll_option UNIQUE (poll_message_id, instance_id, option_hash)
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_poll_options_poll ON poll_options(poll_message_id, instance_id);
 	`
 
 	s.loggerWrapper.GetLogger("poll-service").LogInfo("[POLL] Running auto-migration...")
@@ -137,8 +171,64 @@ func (s *pollService) SavePollVote(ctx context.Context, vote *model.PollVote) er
 	return nil
 }
 
+// SavePollDefinition guarda as opções (texto + hash) e a pergunta de uma
+// enquete no envio. Best-effort e idempotente (ON CONFLICT).
+func (s *pollService) SavePollDefinition(ctx context.Context, instanceID, pollMessageID, chatJid, question string, options []string) error {
+	if pollMessageID == "" || len(options) == 0 {
+		return nil
+	}
+	query := `
+		INSERT INTO poll_options (poll_message_id, instance_id, question, option_index, option_name, option_hash)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		ON CONFLICT (poll_message_id, instance_id, option_hash)
+		DO UPDATE SET option_name = EXCLUDED.option_name,
+		              option_index = EXCLUDED.option_index,
+		              question = EXCLUDED.question
+	`
+	for idx, name := range options {
+		if _, err := s.db.ExecContext(ctx, query, pollMessageID, instanceID, question, idx, name, hashOption(name)); err != nil {
+			s.loggerWrapper.GetLogger("poll-service").LogError("[POLL] Failed to save poll option: %v", err)
+			return fmt.Errorf("failed to save poll option: %w", err)
+		}
+	}
+	s.loggerWrapper.GetLogger("poll-service").LogInfo("[POLL] Saved %d option(s) for poll %s", len(options), pollMessageID)
+	return nil
+}
+
+// knownOption guarda a ordem de registro para preservar a ordem original da enquete.
+type knownOption struct {
+	name  string
+	hash  string
+	index int
+}
+
+// loadPollOptions carrega as definições guardadas de uma enquete.
+func (s *pollService) loadPollOptions(ctx context.Context, pollMessageID, instanceID string) (question string, opts []knownOption) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT question, option_index, option_name, option_hash
+		 FROM poll_options WHERE poll_message_id = $1 AND instance_id = $2
+		 ORDER BY option_index ASC`, pollMessageID, instanceID)
+	if err != nil {
+		s.loggerWrapper.GetLogger("poll-service").LogWarn("[POLL] Could not load poll options: %v", err)
+		return "", nil
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var q, name, h string
+		var idx int
+		if err := rows.Scan(&q, &idx, &name, &h); err != nil {
+			continue
+		}
+		if q != "" {
+			question = q
+		}
+		opts = append(opts, knownOption{name: name, hash: h, index: idx})
+	}
+	return question, opts
+}
+
 // GetPollResults retorna os resultados agregados de uma enquete
-func (s *pollService) GetPollResults(ctx context.Context, pollMessageID string, instanceID string) (*model.PollResults, error) {
+func (s *pollService) GetPollResults(ctx context.Context, pollMessageID, instanceID string, providedOptions []string) (*model.PollResults, error) {
 	s.loggerWrapper.GetLogger("poll-service").LogInfo("[POLL] Fetching results for poll %s", pollMessageID)
 
 	query := `
@@ -200,41 +290,111 @@ func (s *pollService) GetPollResults(ctx context.Context, pollMessageID string, 
 		return nil, fmt.Errorf("error iterating votes: %w", err)
 	}
 
-	// Verificar se há votos antes de construir resultado
-	if len(votes) == 0 {
-		s.loggerWrapper.GetLogger("poll-service").LogInfo("[POLL] No votes found for poll %s", pollMessageID)
-		return &model.PollResults{
-			PollMessageID: pollMessageID,
-			PollChatJid:   "",
-			TotalVotes:    0,
-			Votes:         []model.PollVote{},
-			OptionCounts:  make(map[string]int),
-			Voters:        []model.VoterInfo{},
-		}, nil
+	// Rótulos: definições guardadas no envio + opções informadas no query (estas
+	// sobrepõem/completam). Assim enquetes antigas (sem registro) ainda podem ser
+	// rotuladas se o chamador passar as opções. Com 0 voto, ainda mostramos as
+	// opções conhecidas (contagem 0).
+	question, known := s.loadPollOptions(ctx, pollMessageID, instanceID)
+
+	hashToName := make(map[string]string)
+	seen := make(map[string]bool)
+	order := make([]knownOption, 0, len(known)+len(providedOptions))
+	addKnown := func(name, hash string, index int) {
+		if hash == "" {
+			return
+		}
+		hashToName[hash] = name
+		if !seen[hash] {
+			seen[hash] = true
+			order = append(order, knownOption{name: name, hash: hash, index: index})
+			return
+		}
+		for i := range order { // override do nome (provided) mantendo a posição
+			if order[i].hash == hash {
+				order[i].name = name
+			}
+		}
+	}
+	for _, o := range known {
+		addKnown(o.name, o.hash, o.index)
+	}
+	for i, name := range providedOptions {
+		name = strings.TrimSpace(name)
+		if name != "" {
+			addKnown(name, hashOption(name), 1000+i)
+		}
 	}
 
-	// Construir informações dos votantes
+	totalVoters := len(votes)
+	pct := func(c int) float64 {
+		if totalVoters == 0 {
+			return 0
+		}
+		return math.Round(float64(c)/float64(totalVoters)*1000) / 10
+	}
+
+	// Opções conhecidas (inclui as de 0 voto) + hashes votados sem rótulo.
+	options := make([]model.PollOptionResult, 0, len(order)+len(optionCounts))
+	for _, o := range order {
+		c := optionCounts[o.hash]
+		options = append(options, model.PollOptionResult{
+			Name: o.name, Hash: o.hash, Count: c, Percentage: pct(c), Known: true,
+		})
+	}
+	for hash, c := range optionCounts {
+		if !seen[hash] {
+			options = append(options, model.PollOptionResult{
+				Name: "", Hash: hash, Count: c, Percentage: pct(c), Known: false,
+			})
+		}
+	}
+	// Ranking: mais votada primeiro; empate → conhecidas antes, depois por nome.
+	sort.SliceStable(options, func(a, b int) bool {
+		if options[a].Count != options[b].Count {
+			return options[a].Count > options[b].Count
+		}
+		if options[a].Known != options[b].Known {
+			return options[a].Known
+		}
+		return options[a].Name < options[b].Name
+	})
+
 	voters := make([]model.VoterInfo, len(votes))
 	for i, vote := range votes {
-		voters[i] = model.VoterInfo{
-			Jid:             vote.VoterJid,
-			Phone:           vote.VoterPhone,
-			Name:            vote.VoterName,
-			SelectedOptions: vote.SelectedOptions,
-			VotedAt:         vote.VotedAt,
+		names := make([]string, len(vote.SelectedOptions))
+		for j, h := range vote.SelectedOptions {
+			names[j] = hashToName[h] // "" se hash desconhecido
 		}
+		voters[i] = model.VoterInfo{
+			Jid:                 vote.VoterJid,
+			Phone:               vote.VoterPhone,
+			Name:                vote.VoterName,
+			SelectedOptions:     vote.SelectedOptions,
+			SelectedOptionNames: names,
+			VotedAt:             vote.VotedAt,
+		}
+	}
+
+	chatJid := ""
+	if len(votes) > 0 {
+		chatJid = votes[0].PollChatJid
+	} else {
+		votes = []model.PollVote{}
 	}
 
 	results := &model.PollResults{
 		PollMessageID: pollMessageID,
-		PollChatJid:   votes[0].PollChatJid,
-		TotalVotes:    len(votes),
+		PollChatJid:   chatJid,
+		Question:      question,
+		TotalVotes:    totalVoters,
+		TotalVoters:   totalVoters,
+		Options:       options,
 		Votes:         votes,
 		OptionCounts:  optionCounts,
 		Voters:        voters,
 	}
 
-	s.loggerWrapper.GetLogger("poll-service").LogInfo("[POLL] Found %d votes for poll %s", len(votes), pollMessageID)
+	s.loggerWrapper.GetLogger("poll-service").LogInfo("[POLL] Poll %s: %d voter(s), %d option(s)", pollMessageID, totalVoters, len(options))
 	return results, nil
 }
 
@@ -278,14 +438,6 @@ func BuildPollVoteFromEvent(
 	// NOTA: O JID swap já foi feito antes de chegar aqui!
 	// Se havia LID+WhatsApp, o Sender JÁ É o número real (@s.whatsapp.net) e SenderAlt é o LID
 	voterPhone := voteInfo.Sender.User
-	voterJid := voteInfo.Sender.String()
-
-	fmt.Printf("[POLL DEBUG] ==========================================\n")
-	fmt.Printf("[POLL DEBUG] Voter JID: %s\n", voterJid)
-	fmt.Printf("[POLL DEBUG] Sender.Server: %s\n", voteInfo.Sender.Server)
-	fmt.Printf("[POLL DEBUG] Sender.User: %s\n", voteInfo.Sender.User)
-	fmt.Printf("[POLL DEBUG] FINAL voterPhone: %s\n", voterPhone)
-	fmt.Printf("[POLL DEBUG] ==========================================\n")
 
 	return &model.PollVote{
 		ID:              uuid.New().String(),
