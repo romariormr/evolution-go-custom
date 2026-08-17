@@ -1602,6 +1602,17 @@ func (s *sendService) sendPollWithRetry(data *PollStruct, instance *instance_mod
 		}
 
 		s.loggerWrapper.GetLogger(instance.Id).LogInfo("[%s] SendPoll successful on attempt %d", instance.Id, attempt)
+
+		// Guarda as opções (texto + hash) pra depois traduzir os votos, que só
+		// carregam o hash. Best-effort: falha aqui não invalida o envio.
+		if message != nil && message.Info.ID != "" {
+			if ps := s.whatsmeowService.GetPollService(); ps != nil {
+				if err := ps.SavePollDefinition(context.Background(), instance.Id, message.Info.ID, data.Number, data.Question, data.Options); err != nil {
+					s.loggerWrapper.GetLogger(instance.Id).LogWarn("[%s] Poll enviada, mas não gravou as opções: %v", instance.Id, err)
+				}
+			}
+		}
+
 		return message, nil
 	}
 
