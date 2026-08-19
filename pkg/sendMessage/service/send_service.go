@@ -26,6 +26,7 @@ import (
 	whatsmeow_service "github.com/EvolutionAPI/evolution-go/pkg/whatsmeow/service"
 	"github.com/chai2010/webp"
 	"github.com/gabriel-vasile/mimetype"
+	"github.com/vincent-petithory/dataurl"
 	"go.mau.fi/whatsmeow"
 	waBinary "go.mau.fi/whatsmeow/binary"
 	"go.mau.fi/whatsmeow/proto/waE2E"
@@ -206,6 +207,13 @@ type Button struct {
 type ButtonStruct struct {
 	// Destination phone number.
 	Number       string       `json:"number" example:"5582988898565"`
+	// Optional deterministic message id. If set, it is used as the WhatsApp
+	// message id instead of a generated one — enables idempotent retry and
+	// looking the message up later via /message/status.
+	Id           string       `json:"id,omitempty"`
+	// Optional header image: http(s) URL or data URI (data:image/jpeg;base64,...).
+	// Renders photo + buttons in a single native message. JPEG recommended.
+	Image        string       `json:"image,omitempty"`
 	// Header title (required).
 	Title        string       `json:"title" example:"Oferta especial"`
 	// Body description text (required).
@@ -338,6 +346,8 @@ type CarouselCardStruct struct {
 type CarouselStruct struct {
 	// Destination phone number.
 	Number    string               `json:"number" example:"5582988898565"`
+	// Optional deterministic message id (idempotent retry / status lookup).
+	Id        string               `json:"id,omitempty"`
 	// Optional message body shown above the cards.
 	Body      string               `json:"body,omitempty" example:"Confira nossas novidades!"`
 	// Optional message footer shown below the cards.
@@ -1775,7 +1785,43 @@ func mapKeyType(keyType string) string {
 	}
 }
 
+// fetchImageBytes baixa a imagem de uma URL http(s) ou decodifica um data URI
+// (data:image/...;base64,...). Mesma flexibilidade da foto de grupo — o node
+// converte binário em data URI, então isto cobre URL / data URI / binário.
+func fetchImageBytes(image string) ([]byte, error) {
+	if strings.HasPrefix(image, "http://") || strings.HasPrefix(image, "https://") {
+		resp, err := http.Get(image)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch image from URL: %v", err)
+		}
+		defer resp.Body.Close()
+		return io.ReadAll(resp.Body)
+	}
+	if strings.HasPrefix(image, "data:") {
+		du, err := dataurl.DecodeString(image)
+		if err != nil {
+			return nil, fmt.Errorf("invalid image data URI: %v", err)
+		}
+		return du.Data, nil
+	}
+	return nil, errors.New("image must be an http(s) URL or a data URI (data:image/...;base64,...)")
+}
+
+// errIfNewsletter recusa mensagem interativa (botão/lista/carrossel) para canais.
+// Canal é broadcast puro; o WhatsApp não renderiza interativo e mostra o
+// placeholder cinza "não é possível carregar, use o celular". Melhor recusar com
+// motivo do que gravar uma mensagem que ninguém consegue abrir.
+func errIfNewsletter(number, kind string) error {
+	if strings.Contains(number, "@newsletter") {
+		return fmt.Errorf("canais do WhatsApp não suportam %s; use texto, mídia ou enquete", kind)
+	}
+	return nil
+}
+
 func (s *sendService) SendButton(data *ButtonStruct, instance *instance_model.Instance) (*MessageSendStruct, error) {
+	if err := errIfNewsletter(data.Number, "mensagem com botões"); err != nil {
+		return nil, err
+	}
 	client, err := s.ensureClientConnected(instance.Id)
 	if err != nil {
 		return nil, err
@@ -1880,6 +1926,9 @@ func (s *sendService) SendButton(data *ButtonStruct, instance *instance_model.In
 	}
 
 	messageId := client.GenerateMessageID()
+	if data.Id != "" {
+		messageId = data.Id // id determinístico do chamador (retry idempotente)
+	}
 	templateId := strconv.FormatInt(time.Now().UnixNano()/1000000, 10)
 	messageParamsJSON := `{"from":"api","templateId":` + templateId + `}`
 
@@ -1932,8 +1981,38 @@ func (s *sendService) SendButton(data *ButtonStruct, instance *instance_model.In
 			}
 		}
 
-		// Header with title
-		if useHeader {
+		// Header: imagem e/ou título. A imagem entra como header media (mesmo
+		// caminho do card do carrossel), fazendo o WhatsApp renderizar foto +
+		// botões numa única mensagem — /send/button não carregava imagem antes.
+		if data.Image != "" {
+			fileData, ferr := fetchImageBytes(data.Image)
+			if ferr != nil {
+				return nil, ferr
+			}
+			uploaded, uerr := client.Upload(context.Background(), fileData, whatsmeow.MediaImage)
+			if uerr != nil {
+				return nil, fmt.Errorf("failed to upload button header image: %v", uerr)
+			}
+			header := &waE2E.InteractiveMessage_Header{
+				HasMediaAttachment: proto.Bool(true),
+				Media: &waE2E.InteractiveMessage_Header_ImageMessage{
+					ImageMessage: &waE2E.ImageMessage{
+						URL:           proto.String(uploaded.URL),
+						DirectPath:    proto.String(uploaded.DirectPath),
+						MediaKey:      uploaded.MediaKey,
+						Mimetype:      proto.String("image/jpeg"),
+						FileEncSHA256: uploaded.FileEncSHA256,
+						FileSHA256:    uploaded.FileSHA256,
+						FileLength:    proto.Uint64(uint64(len(fileData))),
+						JPEGThumbnail: gerarThumbnail(fileData),
+					},
+				},
+			}
+			if data.Title != "" {
+				header.Title = proto.String(data.Title)
+			}
+			interactiveMsg.Header = header
+		} else if useHeader {
 			interactiveMsg.Header = &waE2E.InteractiveMessage_Header{
 				Title:              proto.String(data.Title),
 				HasMediaAttachment: proto.Bool(false),
@@ -2091,6 +2170,9 @@ func sectionsToString(data *ListStruct) (string, error) {
 }
 
 func (s *sendService) SendList(data *ListStruct, instance *instance_model.Instance) (*MessageSendStruct, error) {
+	if err := errIfNewsletter(data.Number, "mensagem com lista"); err != nil {
+		return nil, err
+	}
 	// Legacy ListMessage format - works on iOS, Android and Web
 	// Matching PAPI Node.js default (non-modern) path exactly
 
@@ -2614,6 +2696,9 @@ func (s *sendService) SendMessage(instance *instance_model.Instance, msg *waE2E.
 }
 
 func (s *sendService) SendCarousel(data *CarouselStruct, instance *instance_model.Instance) (*MessageSendStruct, error) {
+	if err := errIfNewsletter(data.Number, "carrossel"); err != nil {
+		return nil, err
+	}
 	client, err := s.ensureClientConnected(instance.Id)
 	if err != nil {
 		return nil, err
@@ -2817,6 +2902,7 @@ func (s *sendService) SendCarousel(data *CarouselStruct, instance *instance_mode
 	}
 
 	message, err := s.SendMessage(instance, msg, "InteractiveMessage", &SendDataStruct{
+		Id:     data.Id,
 		Number: data.Number,
 		Delay:  data.Delay,
 	})

@@ -1,5 +1,17 @@
 # Evolution GO - Changelog
 
+## v0.16.11
+
+### Features
+- **`POST /send/button` agora aceita imagem no cabeçalho** (`image`: URL http(s) ou data URI `data:image/...;base64,...`). Renderiza **foto + botões numa única mensagem nativa** em conversa/grupo — antes o único jeito de ter foto com botão era carrossel de 1 card. A imagem entra como `Header.Media` (mesmo caminho do card do carrossel), com miniatura JPEG embutida (`gerarThumbnail`). JPEG recomendado.
+- **`id` determinístico opcional** em `ButtonStruct` e `CarouselStruct`. Se informado, vira o id da mensagem no WhatsApp (antes era sempre gerado) — permite retry idempotente e consultar depois via `/message/status`. `sendText`/`sendMedia` já tinham; botão e carrossel eram os que faltavam para o fallback seguro.
+
+### Fixes
+- **Interativos em canal agora são recusados com motivo.** `/send/button`, `/send/list` e `/send/carousel` para um JID `@newsletter` retornam 400 `"canais do WhatsApp não suportam <tipo>; use texto, mídia ou enquete"`. Antes a API aceitava, o WhatsApp gravava e o leitor via só o placeholder cinza "não é possível carregar, use o celular". Canal é broadcast puro, não renderiza mensagem interativa.
+
+### Notes
+- Carrossel Premium multi-card (com critério de preço histórico) segue como atividade futura — não faz parte desta entrega. Esta versão cobre a primitiva técnica: foto + botão numa mensagem, via `/send/button` com `image` (ou carrossel de 1 card, que continua válido).
+
 ## v0.16.10
 
 ### Improvements
