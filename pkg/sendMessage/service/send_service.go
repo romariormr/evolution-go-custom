@@ -87,13 +87,19 @@ type TextStruct struct {
 }
 
 type LinkStruct struct {
-	Number       string       `json:"number"`
-	Text         string       `json:"text"`
-	Title        string       `json:"title"`
-	Url          string       `json:"url"`
-	Description  string       `json:"description"`
-	ImgUrl       string       `json:"imgUrl"`
-	Id           string       `json:"id"`
+	Number      string `json:"number"`
+	Text        string `json:"text"`
+	Title       string `json:"title"`
+	Url         string `json:"url"`
+	Description string `json:"description"`
+	// ImgUrl: URL http(s) OU data URI (data:image/...;base64,...) da imagem do
+	// cartão. O servidor busca/decodifica e reduz a uma miniatura JPEG pequena.
+	ImgUrl string `json:"imgUrl"`
+	// ThumbnailBase64: bytes JPEG da miniatura já prontos (com ou sem prefixo
+	// data URI). Se informado, o servidor só repassa — sem rede, sem processar.
+	// Tem prioridade sobre ImgUrl.
+	ThumbnailBase64 string       `json:"thumbnailBase64"`
+	Id              string       `json:"id"`
 	Delay        int32        `json:"delay"`
 	MentionedJID []string     `json:"mentionedJid"`
 	MentionAll   bool         `json:"mentionAll"`
@@ -722,46 +728,74 @@ func (s *sendService) sendLinkWithRetry(data *LinkStruct, instance *instance_mod
 			continue
 		}
 
+		// URL do cartão: data.Url tem prioridade; senão a primeira URL do texto.
+		// O WhatsApp atrela o preview a uma URL que apareça no MatchedText — e o
+		// mais confiável é essa URL também estar no corpo (Text) da mensagem.
+		// (Esta versão do whatsmeow não tem campo CanonicalURL no ExtendedTextMessage.)
+		linkURL := strings.TrimSpace(data.Url)
 		matchedText := findURL(data.Text)
+		if linkURL == "" {
+			linkURL = matchedText
+		}
+		if matchedText == "" {
+			matchedText = linkURL
+		}
 
+		// Scraping de metadata só quando o caller não mandou NADA (título, descrição
+		// e imagem/miniatura todos vazios) e há URL. Antes o scraping rodava sempre
+		// que havia URL no texto e sobrescrevia o imgUrl do caller com "" quando não
+		// achava imagem.
+		if linkURL != "" && data.Title == "" && data.Description == "" && data.ImgUrl == "" && data.ThumbnailBase64 == "" {
+			if title, description, imgUrl, err := fetchLinkMetadata(linkURL); err == nil {
+				data.Title = title
+				data.Description = description
+				data.ImgUrl = imgUrl
+			}
+		}
+
+		// Miniatura: thumbnailBase64 (pronto, repassa) > imgUrl (busca/decodifica e
+		// reduz a um JPEG pequeno). Miniatura grande demais o cliente descarta — por
+		// isso a de imgUrl passa por gerarThumbnail; a base64 do caller só é reduzida
+		// se vier muito grande.
+		var thumb []byte
+		if data.ThumbnailBase64 != "" {
+			raw := data.ThumbnailBase64
+			if strings.HasPrefix(raw, "data:") {
+				if du, derr := dataurl.DecodeString(raw); derr == nil {
+					thumb = du.Data
+				}
+			} else if dec, derr := base64.StdEncoding.DecodeString(raw); derr == nil {
+				thumb = dec
+			}
+			if len(thumb) > 200*1024 { // salvaguarda: encolhe se vier grande
+				if t := gerarThumbnail(thumb); t != nil {
+					thumb = t
+				}
+			}
+		} else if data.ImgUrl != "" {
+			if raw, ferr := fetchImageBytes(data.ImgUrl); ferr == nil {
+				if t := gerarThumbnail(raw); t != nil {
+					thumb = t
+				} else {
+					thumb = raw
+				}
+			}
+		}
+
+		previewType := waE2E.ExtendedTextMessage_NONE
+		extended := &waE2E.ExtendedTextMessage{
+			Text:        &data.Text,
+			Title:       &data.Title,
+			Description: &data.Description,
+			PreviewType: &previewType,
+		}
 		if matchedText != "" {
-			title, description, imgUrl, err := fetchLinkMetadata(matchedText)
-			if err != nil {
-				if attempt == maxRetries {
-					return nil, err
-				}
-				continue
-			}
-
-			data.Title = title
-			data.Description = description
-			data.ImgUrl = imgUrl
+			extended.MatchedText = &matchedText
 		}
-
-		var fileData []byte
-		if data.ImgUrl != "" {
-			resp, err := http.Get(data.ImgUrl)
-			if err != nil {
-				if attempt == maxRetries {
-					return nil, err
-				}
-				continue
-			}
-			defer resp.Body.Close()
-			fileData, _ = io.ReadAll(resp.Body)
+		if len(thumb) > 0 {
+			extended.JPEGThumbnail = thumb
 		}
-
-		previewType := waE2E.ExtendedTextMessage_VIDEO
-		msg := &waE2E.Message{
-			ExtendedTextMessage: &waE2E.ExtendedTextMessage{
-				Text:          &data.Text,
-				Title:         &data.Title,
-				MatchedText:   &matchedText,
-				JPEGThumbnail: fileData,
-				Description:   &data.Description,
-				PreviewType:   &previewType,
-			},
-		}
+		msg := &waE2E.Message{ExtendedTextMessage: extended}
 
 		message, err := s.SendMessage(instance, msg, "ExtendedTextMessage", &SendDataStruct{
 			Id:           data.Id,
