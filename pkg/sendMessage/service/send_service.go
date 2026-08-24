@@ -105,10 +105,10 @@ type LinkStruct struct {
 	// além da miniatura inline. Default true. false = só inline (cartão compacto,
 	// sem o upload — respeita o "thumbnailBase64 só repassa, sem rede").
 	HdThumbnail *bool `json:"hdThumbnail,omitempty"`
-	// ThumbInlineMax: lado maior (px) da miniatura INLINE. Default 200, clampado
-	// a [64,320] e limitado a ~8 KB — o WhatsApp REJEITA inline grande (mostra
-	// preto). A nitidez do cartão vem do HQ (celular busca); no Desktop, que não
-	// busca o HQ, o inline fica mais mole e não há como evitar por aqui.
+	// ThumbInlineMax: lado maior (px) da miniatura INLINE. Default 72 — pequeno de
+	// propósito: força o cliente a buscar o HQ (nítido). Valores maiores fazem o
+	// cliente usar o inline esticado (borrado) e ignorar o HQ. Clampado a [48,320],
+	// teto ~8 KB.
 	ThumbInlineMax int          `json:"thumbInlineMax,omitempty"`
 	Id             string       `json:"id"`
 	Delay        int32        `json:"delay"`
@@ -1947,13 +1947,22 @@ func scaleEncodeJPEG(src image.Image, maxDim, quality int) []byte {
 // naturalmente mais mole; não dá pra "resolver" o Desktop aumentando o inline sem
 // reintroduzir o preto no celular.
 //
-// maxDim é clampado a [64,320] e o resultado é limitado a ~8 KB.
+// IMPORTANTE — por que o default é 72px (não maior): com um inline "grande o
+// bastante" (ex.: 200px) o cliente considera a miniatura suficiente e NÃO busca o
+// HQ (ThumbnailDirectPath) — renderiza o inline esticado, borrado. Um inline
+// pequeno (~72px) é insuficiente pra exibir e FORÇA o cliente a baixar o HQ, que é
+// nítido. Confirmado em produção: 72px -> nítido; 200px -> borrado. Ou seja, o
+// inline pequeno não é só um fallback: é o gatilho pro cartão HQ.
+//
+// maxDim é clampado a [48,320] e o resultado é limitado a ~8 KB. Aumentar via
+// thumbInlineMax só faz sentido pra quem quer render inline puro (sem depender do
+// HQ), aceitando perder nitidez.
 func inlineFromImage(src image.Image, maxDim int) []byte {
 	if maxDim <= 0 {
-		maxDim = 200
+		maxDim = 72
 	}
-	if maxDim < 64 {
-		maxDim = 64
+	if maxDim < 48 {
+		maxDim = 48
 	}
 	if maxDim > 320 {
 		maxDim = 320
