@@ -1,5 +1,20 @@
 # Evolution GO - Changelog
 
+## v0.16.12
+
+### Fixes
+- **`POST /send/link` não renderizava o cartão de link (saía texto puro).** Três causas no `sendLinkWithRetry`:
+  1. **Miniatura crua e grande.** `JPEGThumbnail` recebia os bytes baixados inteiros (ex.: 104 KB) — o cliente WhatsApp descarta uma miniatura desse tamanho e, sem miniatura válida, não desenha o cartão. Agora a imagem passa por `gerarThumbnail` (JPEG pequeno) antes de virar `JPEGThumbnail`.
+  2. **`data:` URI e base64 quebravam.** A imagem era buscada com `http.Get(imgUrl)`, que falha em `data:image/...;base64,...` → miniatura vazia. Agora usa o helper que aceita URL http(s) **e** data URI.
+  3. **Scraping sobrescrevia o que o caller mandou.** `fetchLinkMetadata` rodava sempre que havia URL no texto e apagava `imgUrl`/título/descrição informados. Agora só faz scraping quando o caller não mandou nada (título, descrição e imagem todos vazios).
+- **Novo campo `thumbnailBase64`** em `/send/link`: bytes JPEG da miniatura já prontos (com ou sem prefixo `data:`). Tem prioridade sobre `imgUrl` e o servidor só repassa — sem rede, sem processar imagem (encolhe apenas se vier > 200 KB, por segurança).
+- **`imgUrl` agora aceita data URI** além de URL http(s).
+- `PreviewType` mudou de `VIDEO` (fixo, mostrava play em cima da imagem) para `NONE`, adequado a cartão de link/imagem.
+
+### Notes
+- Esta versão do whatsmeow **não expõe `CanonicalURL`** no `ExtendedTextMessage` — o cartão depende de `MatchedText` + miniatura válida + título/descrição. Na prática: a **URL precisa aparecer no corpo (`text`)** da mensagem pro WhatsApp atrelar o preview; `url` sozinho (fora do texto) pode não renderizar.
+- `/send/link` **não** é bloqueado em `@newsletter` (ao contrário de botão/lista/carrossel) — é justamente o formato clicável e leve recomendado para canais.
+
 ## v0.16.11
 
 ### Features
