@@ -1,5 +1,12 @@
 # Evolution GO - Changelog
 
+## v0.16.14
+
+### Fixes
+- **Cartão de `/send/link` saía borrado no WhatsApp Desktop.** A miniatura inline (`JPEGThumbnail`) era gerada em **72px** (nearest-neighbor) — o Desktop estica o inline até a largura do cartão em vez de buscar a HQ, então saía borrado. Agora o inline é reamostrado com qualidade (CatmullRom, `golang.org/x/image/draw`) num alvo **~600px**, qualidade 78 caindo em degraus pra caber em ~60 KB. Campo novo **`thumbInlineMax`** (default 600) pra ajustar o lado maior por requisição.
+- **`thumbnailBase64` saía borrado até no celular.** O upload HQ estava **travado atrás de um `image.DecodeConfig`** separado; quando esse decode falhava na imagem enviada, o HQ era pulado em silêncio e o cliente ficava só com o inline pequeno. Agora a imagem é decodificada **uma vez** (serve pro inline e pras dimensões) e o **upload HQ não depende mais do decode** — sobe sempre; preenche width/height só se as dimensões forem conhecidas. `thumbnailBase64` e `imgUrl` seguem exatamente o **mesmo caminho** de HQ.
+- Logs novos no `SendLink`: "HQ aplicado (WxH, inline N bytes)" no sucesso e aviso explícito quando a imagem não decodifica ou o upload falha — pra diagnosticar borrão/compacto sem adivinhação.
+
 ## v0.16.13
 
 ### Features

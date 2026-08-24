@@ -27,6 +27,7 @@ import (
 	"github.com/chai2010/webp"
 	"github.com/gabriel-vasile/mimetype"
 	"github.com/vincent-petithory/dataurl"
+	xdraw "golang.org/x/image/draw"
 	"go.mau.fi/whatsmeow"
 	waBinary "go.mau.fi/whatsmeow/binary"
 	"go.mau.fi/whatsmeow/proto/waE2E"
@@ -103,8 +104,11 @@ type LinkStruct struct {
 	// pelo caminho de mídia e preenche ThumbnailDirectPath/MediaKey/SHA256/dims,
 	// além da miniatura inline. Default true. false = só inline (cartão compacto,
 	// sem o upload — respeita o "thumbnailBase64 só repassa, sem rede").
-	HdThumbnail *bool        `json:"hdThumbnail,omitempty"`
-	Id          string       `json:"id"`
+	HdThumbnail *bool `json:"hdThumbnail,omitempty"`
+	// ThumbInlineMax: lado maior (px) da miniatura INLINE. Default 600. Aumente
+	// se o cartão grande sair borrado no Desktop (que estica o inline).
+	ThumbInlineMax int          `json:"thumbInlineMax,omitempty"`
+	Id             string       `json:"id"`
 	Delay        int32        `json:"delay"`
 	MentionedJID []string     `json:"mentionedJid"`
 	MentionAll   bool         `json:"mentionAll"`
@@ -777,16 +781,25 @@ func (s *sendService) sendLinkWithRetry(data *LinkStruct, instance *instance_mod
 			}
 		}
 
-		// Miniatura inline pequena — fallback que o cliente sempre consegue desenhar
-		// mesmo sem buscar a HQ. Cliente descarta miniatura inline grande, por isso
-		// reduz via gerarThumbnail.
-		var inline []byte
+		// Decodifica UMA vez: serve tanto pra miniatura inline (reamostrada com
+		// qualidade) quanto pras dimensões do HQ. Antes o HQ dependia de um
+		// image.DecodeConfig separado — quando ele falhava (formato/variante), o HQ
+		// era pulado em silêncio e o cliente ficava só com o inline de 72px (era o
+		// motivo de thumbnailBase64 sair borrado até no celular).
+		var srcImg image.Image
+		var wpx, hpx int
 		if len(fullBytes) > 0 {
-			if t := gerarThumbnail(fullBytes); t != nil {
-				inline = t
+			if img, _, derr := image.Decode(bytes.NewReader(fullBytes)); derr == nil {
+				srcImg = img
+				wpx, hpx = img.Bounds().Dx(), img.Bounds().Dy()
 			} else {
-				inline = fullBytes
+				s.loggerWrapper.GetLogger(instance.Id).LogWarn("[%s] SendLink: imagem não decodificou (%v) — cartão pode sair sem miniatura", instance.Id, derr)
 			}
+		}
+
+		var inline []byte
+		if srcImg != nil {
+			inline = inlineFromImage(srcImg, data.ThumbInlineMax)
 		}
 
 		previewType := waE2E.ExtendedTextMessage_NONE
@@ -804,26 +817,28 @@ func (s *sendService) sendLinkWithRetry(data *LinkStruct, instance *instance_mod
 		}
 
 		// Cartão GRANDE (HQ): upload da imagem pelo caminho de mídia (MediaLinkThumbnail)
-		// e preenche os campos de thumbnail criptografado + dimensões. Sem isso o
-		// WhatsApp desenha só o cartão compacto (a partir da miniatura inline).
-		// Best-effort: se o upload/decode falhar, fica o inline (cartão compacto).
+		// e preenche thumbnail criptografado + dimensões. Best-effort: se o upload
+		// falhar, fica o inline (compacto). O upload NÃO depende mais do decode —
+		// se conseguimos as dimensões (srcImg) preenche width/height; senão sobe
+		// mesmo assim. thumbnailBase64 e imgUrl passam pelo MESMO caminho.
 		hd := data.HdThumbnail == nil || *data.HdThumbnail
 		if hd && len(fullBytes) > 0 && len(fullBytes) <= 5*1024*1024 {
-			if cfg, _, derr := image.DecodeConfig(bytes.NewReader(fullBytes)); derr == nil {
-				if client := s.clientPointer[instance.Id]; client != nil {
-					if up, uerr := client.Upload(context.Background(), fullBytes, whatsmeow.MediaLinkThumbnail); uerr == nil {
-						directPath := up.DirectPath
-						ts := time.Now().Unix()
-						extended.ThumbnailDirectPath = &directPath
-						extended.MediaKey = up.MediaKey
-						extended.ThumbnailSHA256 = up.FileSHA256
-						extended.ThumbnailEncSHA256 = up.FileEncSHA256
-						extended.MediaKeyTimestamp = &ts
-						extended.ThumbnailHeight = proto.Uint32(uint32(cfg.Height))
-						extended.ThumbnailWidth = proto.Uint32(uint32(cfg.Width))
-					} else {
-						s.loggerWrapper.GetLogger(instance.Id).LogWarn("[%s] SendLink: upload HQ thumbnail falhou, usando inline: %v", instance.Id, uerr)
+			if client := s.clientPointer[instance.Id]; client != nil {
+				if up, uerr := client.Upload(context.Background(), fullBytes, whatsmeow.MediaLinkThumbnail); uerr == nil {
+					directPath := up.DirectPath
+					ts := time.Now().Unix()
+					extended.ThumbnailDirectPath = &directPath
+					extended.MediaKey = up.MediaKey
+					extended.ThumbnailSHA256 = up.FileSHA256
+					extended.ThumbnailEncSHA256 = up.FileEncSHA256
+					extended.MediaKeyTimestamp = &ts
+					if wpx > 0 && hpx > 0 {
+						extended.ThumbnailHeight = proto.Uint32(uint32(hpx))
+						extended.ThumbnailWidth = proto.Uint32(uint32(wpx))
 					}
+					s.loggerWrapper.GetLogger(instance.Id).LogInfo("[%s] SendLink: HQ aplicado (%dx%d, inline %d bytes)", instance.Id, wpx, hpx, len(inline))
+				} else {
+					s.loggerWrapper.GetLogger(instance.Id).LogWarn("[%s] SendLink: upload HQ thumbnail falhou, usando inline (%d bytes): %v", instance.Id, len(inline), uerr)
 				}
 			}
 		}
@@ -1872,6 +1887,75 @@ func fetchImageBytes(image string) ([]byte, error) {
 		return du.Data, nil
 	}
 	return nil, errors.New("image must be an http(s) URL or a data URI (data:image/...;base64,...)")
+}
+
+// scaleEncodeJPEG reduz uma imagem já decodificada para caber em maxDim no lado
+// maior (só reduz, nunca amplia) usando reamostragem de qualidade (CatmullRom) e
+// codifica JPEG. Retorna nil em falha.
+func scaleEncodeJPEG(src image.Image, maxDim, quality int) []byte {
+	if src == nil {
+		return nil
+	}
+	if maxDim <= 0 {
+		maxDim = 600
+	}
+	if quality <= 0 || quality > 100 {
+		quality = 75
+	}
+	b := src.Bounds()
+	w, h := b.Dx(), b.Dy()
+	if w < 1 || h < 1 {
+		return nil
+	}
+	nw, nh := w, h
+	if w >= h && w > maxDim {
+		nw = maxDim
+		nh = h * maxDim / w
+	} else if h > w && h > maxDim {
+		nh = maxDim
+		nw = w * maxDim / h
+	}
+	if nw < 1 {
+		nw = 1
+	}
+	if nh < 1 {
+		nh = 1
+	}
+	out := src
+	if nw != w || nh != h {
+		dst := image.NewRGBA(image.Rect(0, 0, nw, nh))
+		xdraw.CatmullRom.Scale(dst, dst.Bounds(), src, b, xdraw.Over, nil)
+		out = dst
+	}
+	var buf bytes.Buffer
+	if jpeg.Encode(&buf, out, &jpeg.Options{Quality: quality}) != nil {
+		return nil
+	}
+	return buf.Bytes()
+}
+
+// inlineFromImage gera a miniatura INLINE (JPEGThumbnail) a partir da imagem já
+// decodificada. Alvo maior (default ~600px) pra o WhatsApp Desktop, que estica o
+// inline até a largura do cartão — inline pequeno (72px) saía borrado no desktop.
+// Baixa a qualidade em degraus pra caber em ~60 KB (limite prático do inline).
+func inlineFromImage(src image.Image, maxDim int) []byte {
+	if maxDim <= 0 {
+		maxDim = 600
+	}
+	const capBytes = 60 * 1024
+	for _, q := range []int{78, 65, 50} {
+		if t := scaleEncodeJPEG(src, maxDim, q); t != nil && len(t) <= capBytes {
+			return t
+		}
+	}
+	// Ainda grande: reduz a dimensão mantendo qualidade média.
+	for _, dim := range []int{500, 400, 320} {
+		if t := scaleEncodeJPEG(src, dim, 60); t != nil && len(t) <= capBytes {
+			return t
+		}
+	}
+	// Último recurso: o menor JPEG possível (melhor um inline pequeno que nenhum).
+	return scaleEncodeJPEG(src, 320, 40)
 }
 
 // errIfNewsletter recusa mensagem interativa (botão/lista/carrossel) para canais.
