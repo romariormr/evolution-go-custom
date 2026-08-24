@@ -1,5 +1,14 @@
 # Evolution GO - Changelog
 
+## v0.16.16
+
+### Fixes
+- **`/send/link`: default do inline volta a 72px — restaura a nitidez da 0.16.13.** A 0.16.15 tirou o preto (teto de bytes), mas deixou o default do inline em 200px, e aí o celular renderizava o inline esticado (borrado) **em vez de buscar o HQ**. Descoberta (confirmada em produção): um inline pequeno (~72px) é insuficiente pra exibir e **força** o cliente a baixar o HQ (nítido); um inline "grande o bastante" faz o cliente se contentar com ele. Então o inline pequeno não é só fallback — é o **gatilho** do cartão HQ. Default agora é **72px**.
+- `thumbInlineMax` continua como escape (clamp `[48,320]`, teto ~8 KB), mas aumentá-lo troca nitidez por render inline — o default 72 é o certo pra quase todos os casos.
+
+### Notes
+- Comportamento final: **celular nítido** (via HQ), **Desktop mais mole** (não busca o HQ, usa o inline pequeno) — igual à 0.16.13, que era a referência boa. O ganho real das 0.16.13→0.16.16 foi robustez (thumbnailBase64 no mesmo caminho do imgUrl, HQ desacoplado do decode, logs de diagnóstico).
+
 ## v0.16.15
 
 ### Fixes
