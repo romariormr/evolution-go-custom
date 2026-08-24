@@ -105,8 +105,10 @@ type LinkStruct struct {
 	// além da miniatura inline. Default true. false = só inline (cartão compacto,
 	// sem o upload — respeita o "thumbnailBase64 só repassa, sem rede").
 	HdThumbnail *bool `json:"hdThumbnail,omitempty"`
-	// ThumbInlineMax: lado maior (px) da miniatura INLINE. Default 600. Aumente
-	// se o cartão grande sair borrado no Desktop (que estica o inline).
+	// ThumbInlineMax: lado maior (px) da miniatura INLINE. Default 200, clampado
+	// a [64,320] e limitado a ~8 KB — o WhatsApp REJEITA inline grande (mostra
+	// preto). A nitidez do cartão vem do HQ (celular busca); no Desktop, que não
+	// busca o HQ, o inline fica mais mole e não há como evitar por aqui.
 	ThumbInlineMax int          `json:"thumbInlineMax,omitempty"`
 	Id             string       `json:"id"`
 	Delay        int32        `json:"delay"`
@@ -1935,27 +1937,41 @@ func scaleEncodeJPEG(src image.Image, maxDim, quality int) []byte {
 }
 
 // inlineFromImage gera a miniatura INLINE (JPEGThumbnail) a partir da imagem já
-// decodificada. Alvo maior (default ~600px) pra o WhatsApp Desktop, que estica o
-// inline até a largura do cartão — inline pequeno (72px) saía borrado no desktop.
-// Baixa a qualidade em degraus pra caber em ~60 KB (limite prático do inline).
+// decodificada. O JPEGThumbnail inline TEM QUE SER PEQUENO: o WhatsApp tem um teto
+// baixo (poucos KB) e um inline acima disso é REJEITADO — o cliente mostra um
+// retângulo preto no lugar da imagem, ignorando até o HQ válido. (Foi a regressão
+// da 0.16.14, que mirava ~600px/60KB pro Desktop e quebrava o celular.)
+//
+// A imagem nítida no cartão vem do HQ (ThumbnailDirectPath), que o celular busca.
+// O inline é só o fallback/placeholder — no Desktop, que não busca o HQ, ele fica
+// naturalmente mais mole; não dá pra "resolver" o Desktop aumentando o inline sem
+// reintroduzir o preto no celular.
+//
+// maxDim é clampado a [64,320] e o resultado é limitado a ~8 KB.
 func inlineFromImage(src image.Image, maxDim int) []byte {
 	if maxDim <= 0 {
-		maxDim = 600
+		maxDim = 200
 	}
-	const capBytes = 60 * 1024
-	for _, q := range []int{78, 65, 50} {
+	if maxDim < 64 {
+		maxDim = 64
+	}
+	if maxDim > 320 {
+		maxDim = 320
+	}
+	const capBytes = 8 * 1024
+	for _, q := range []int{70, 55, 40} {
 		if t := scaleEncodeJPEG(src, maxDim, q); t != nil && len(t) <= capBytes {
 			return t
 		}
 	}
-	// Ainda grande: reduz a dimensão mantendo qualidade média.
-	for _, dim := range []int{500, 400, 320} {
-		if t := scaleEncodeJPEG(src, dim, 60); t != nil && len(t) <= capBytes {
+	// Ainda acima do teto: reduz a dimensão até caber.
+	for _, dim := range []int{160, 120, 96} {
+		if t := scaleEncodeJPEG(src, dim, 45); t != nil && len(t) <= capBytes {
 			return t
 		}
 	}
-	// Último recurso: o menor JPEG possível (melhor um inline pequeno que nenhum).
-	return scaleEncodeJPEG(src, 320, 40)
+	// Último recurso: o menor JPEG possível (melhor pequeno que preto).
+	return scaleEncodeJPEG(src, 96, 35)
 }
 
 // errIfNewsletter recusa mensagem interativa (botão/lista/carrossel) para canais.

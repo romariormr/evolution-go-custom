@@ -1,5 +1,15 @@
 # Evolution GO - Changelog
 
+## v0.16.15
+
+### Fixes
+- **Regressão da 0.16.14: imagem preta no celular em `/send/link`.** A 0.16.14 aumentou a miniatura inline (`JPEGThumbnail`) pra ~600px/até 60 KB tentando melhorar o Desktop. Mas o WhatsApp tem um **teto baixo** pro inline (poucos KB) — um inline grande é **rejeitado** e o cliente mostra um **retângulo preto** no lugar da imagem, ignorando até o HQ válido. Logs de produção confirmaram inline de 50–61 KB nos envios afetados. Agora o inline volta a ser pequeno: default **200px**, clampado a `[64,320]`, limitado a **~8 KB**.
+- O upload HQ (`MediaLinkThumbnail`) permanece — é dele que vem a imagem nítida no cartão, buscada pelo **celular**. Confirmado nos logs que o HQ era aplicado corretamente (600x600 / 1024x1024); o problema era só o inline.
+
+### Notes
+- **Desktop continua mais mole.** O WhatsApp Desktop não busca o HQ referenciado; renderiza o inline (que é obrigatoriamente pequeno). Não há como deixar o Desktop nítido aumentando o inline sem reintroduzir o preto no celular. Celular (maioria da audiência) fica nítido via HQ.
+- `thumbInlineMax` mantido, mas agora clampado a `[64,320]` e sempre sujeito ao teto de ~8 KB.
+
 ## v0.16.14
 
 ### Fixes
