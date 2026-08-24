@@ -1,5 +1,15 @@
 # Evolution GO - Changelog
 
+## v0.16.13
+
+### Features
+- **`/send/link` com cartão GRANDE (thumbnail HQ).** Além da miniatura inline, o servidor agora faz upload da imagem pelo caminho de mídia (`whatsmeow.MediaLinkThumbnail`) e preenche `ThumbnailDirectPath`, `MediaKey`, `ThumbnailSHA256`, `ThumbnailEncSHA256`, `MediaKeyTimestamp` e as dimensões (`ThumbnailWidth`/`ThumbnailHeight`, lidas via `image.DecodeConfig`). Com isso o WhatsApp desenha o cartão de imagem grande em vez do compacto.
+  - Vale tanto pra `imgUrl` (URL/data URI) quanto pra `thumbnailBase64`.
+  - **Best-effort**: se o upload ou o decode falhar, cai pro cartão compacto (miniatura inline) — a mensagem não quebra.
+  - A miniatura inline (`JPEGThumbnail` pequeno) continua sendo enviada como fallback pra cliente que não busca a HQ.
+  - Novo campo **`hdThumbnail`** (default `true`). `false` = só inline, sem o upload — para quem quer o caminho leve do `thumbnailBase64` sem rede extra.
+- Limite de segurança: imagens acima de 5 MB não vão pela HQ (fica o inline).
+
 ## v0.16.12
 
 ### Fixes

@@ -98,8 +98,13 @@ type LinkStruct struct {
 	// ThumbnailBase64: bytes JPEG da miniatura já prontos (com ou sem prefixo
 	// data URI). Se informado, o servidor só repassa — sem rede, sem processar.
 	// Tem prioridade sobre ImgUrl.
-	ThumbnailBase64 string       `json:"thumbnailBase64"`
-	Id              string       `json:"id"`
+	ThumbnailBase64 string `json:"thumbnailBase64"`
+	// HdThumbnail: cartão GRANDE (thumbnail HQ). O servidor faz upload da imagem
+	// pelo caminho de mídia e preenche ThumbnailDirectPath/MediaKey/SHA256/dims,
+	// além da miniatura inline. Default true. false = só inline (cartão compacto,
+	// sem o upload — respeita o "thumbnailBase64 só repassa, sem rede").
+	HdThumbnail *bool        `json:"hdThumbnail,omitempty"`
+	Id          string       `json:"id"`
 	Delay        int32        `json:"delay"`
 	MentionedJID []string     `json:"mentionedJid"`
 	MentionAll   bool         `json:"mentionAll"`
@@ -753,32 +758,34 @@ func (s *sendService) sendLinkWithRetry(data *LinkStruct, instance *instance_mod
 			}
 		}
 
-		// Miniatura: thumbnailBase64 (pronto, repassa) > imgUrl (busca/decodifica e
-		// reduz a um JPEG pequeno). Miniatura grande demais o cliente descarta — por
-		// isso a de imgUrl passa por gerarThumbnail; a base64 do caller só é reduzida
-		// se vier muito grande.
-		var thumb []byte
+		// Bytes da imagem: thumbnailBase64 (pronto) tem prioridade; senão imgUrl
+		// (URL http(s) ou data URI). Guardamos os bytes "cheios" para o upload HQ e
+		// derivamos a miniatura inline pequena a partir deles.
+		var fullBytes []byte
 		if data.ThumbnailBase64 != "" {
 			raw := data.ThumbnailBase64
 			if strings.HasPrefix(raw, "data:") {
 				if du, derr := dataurl.DecodeString(raw); derr == nil {
-					thumb = du.Data
+					fullBytes = du.Data
 				}
 			} else if dec, derr := base64.StdEncoding.DecodeString(raw); derr == nil {
-				thumb = dec
-			}
-			if len(thumb) > 200*1024 { // salvaguarda: encolhe se vier grande
-				if t := gerarThumbnail(thumb); t != nil {
-					thumb = t
-				}
+				fullBytes = dec
 			}
 		} else if data.ImgUrl != "" {
 			if raw, ferr := fetchImageBytes(data.ImgUrl); ferr == nil {
-				if t := gerarThumbnail(raw); t != nil {
-					thumb = t
-				} else {
-					thumb = raw
-				}
+				fullBytes = raw
+			}
+		}
+
+		// Miniatura inline pequena — fallback que o cliente sempre consegue desenhar
+		// mesmo sem buscar a HQ. Cliente descarta miniatura inline grande, por isso
+		// reduz via gerarThumbnail.
+		var inline []byte
+		if len(fullBytes) > 0 {
+			if t := gerarThumbnail(fullBytes); t != nil {
+				inline = t
+			} else {
+				inline = fullBytes
 			}
 		}
 
@@ -792,9 +799,35 @@ func (s *sendService) sendLinkWithRetry(data *LinkStruct, instance *instance_mod
 		if matchedText != "" {
 			extended.MatchedText = &matchedText
 		}
-		if len(thumb) > 0 {
-			extended.JPEGThumbnail = thumb
+		if len(inline) > 0 {
+			extended.JPEGThumbnail = inline
 		}
+
+		// Cartão GRANDE (HQ): upload da imagem pelo caminho de mídia (MediaLinkThumbnail)
+		// e preenche os campos de thumbnail criptografado + dimensões. Sem isso o
+		// WhatsApp desenha só o cartão compacto (a partir da miniatura inline).
+		// Best-effort: se o upload/decode falhar, fica o inline (cartão compacto).
+		hd := data.HdThumbnail == nil || *data.HdThumbnail
+		if hd && len(fullBytes) > 0 && len(fullBytes) <= 5*1024*1024 {
+			if cfg, _, derr := image.DecodeConfig(bytes.NewReader(fullBytes)); derr == nil {
+				if client := s.clientPointer[instance.Id]; client != nil {
+					if up, uerr := client.Upload(context.Background(), fullBytes, whatsmeow.MediaLinkThumbnail); uerr == nil {
+						directPath := up.DirectPath
+						ts := time.Now().Unix()
+						extended.ThumbnailDirectPath = &directPath
+						extended.MediaKey = up.MediaKey
+						extended.ThumbnailSHA256 = up.FileSHA256
+						extended.ThumbnailEncSHA256 = up.FileEncSHA256
+						extended.MediaKeyTimestamp = &ts
+						extended.ThumbnailHeight = proto.Uint32(uint32(cfg.Height))
+						extended.ThumbnailWidth = proto.Uint32(uint32(cfg.Width))
+					} else {
+						s.loggerWrapper.GetLogger(instance.Id).LogWarn("[%s] SendLink: upload HQ thumbnail falhou, usando inline: %v", instance.Id, uerr)
+					}
+				}
+			}
+		}
+
 		msg := &waE2E.Message{ExtendedTextMessage: extended}
 
 		message, err := s.SendMessage(instance, msg, "ExtendedTextMessage", &SendDataStruct{
