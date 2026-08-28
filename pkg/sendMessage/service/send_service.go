@@ -3161,26 +3161,39 @@ func (s *sendService) SendStatusMediaUrl(data *StatusMediaStruct, instance *inst
 		return nil, errors.New("type must be 'image' or 'video'")
 	}
 
-	req, err := http.NewRequest("GET", data.Url, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("User-Agent", "Evolution-GO/1.0")
+	var fileData []byte
 
-	httpClient := &http.Client{}
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to download file from URL: %v", err)
-	}
-	defer resp.Body.Close()
+	// Aceita URL http(s) OU data URI (data:image/...;base64,...). Assim o node
+	// pode mandar um binário (ex.: do MinIO) convertido em data URI, sem precisar
+	// de multipart — mesmo padrão da foto de grupo.
+	if strings.HasPrefix(data.Url, "data:") {
+		du, derr := dataurl.DecodeString(data.Url)
+		if derr != nil {
+			return nil, fmt.Errorf("invalid data URI: %v", derr)
+		}
+		fileData = du.Data
+	} else {
+		req, err := http.NewRequest("GET", data.Url, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("User-Agent", "Evolution-GO/1.0")
 
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil, fmt.Errorf("failed to download file: HTTP status %d", resp.StatusCode)
-	}
+		httpClient := &http.Client{}
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("failed to download file from URL: %v", err)
+		}
+		defer resp.Body.Close()
 
-	fileData, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
+		if resp.StatusCode < 200 || resp.StatusCode > 299 {
+			return nil, fmt.Errorf("failed to download file: HTTP status %d", resp.StatusCode)
+		}
+
+		fileData, err = io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return s.sendStatusMedia(client, data, fileData, instance)
