@@ -1,5 +1,10 @@
 # Evolution GO - Changelog
 
+## v0.16.17
+
+### Features
+- **`POST /send/status/media` agora aceita data URI** (`data:image/...;base64,...`) no campo `url`, além de URL http(s) e do upload multipart que já existiam. Assim dá pra publicar no status um binário (ex.: imagem do MinIO) convertido em data URI, sem multipart — mesmo padrão da foto de grupo. Serve pro node expor status de mídia de forma simples.
+
 ## v0.16.16
 
 ### Fixes
