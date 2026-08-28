@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"database/sql"
 	"flag"
 	"fmt"
@@ -9,9 +10,9 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
-	"path/filepath"
 	"syscall"
 	"time"
 
@@ -255,6 +256,18 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 		c.Next()
 	})
 
+	// Health check real — pinga o Postgres de auth. Público e fora do gate de
+	// licença pra Traefik/Portainer detectarem o processo vivo mesmo sem licença.
+	r.GET("/healthz", func(c *gin.Context) {
+		if authDB != nil {
+			if err := authDB.Ping(); err != nil {
+				c.JSON(http.StatusServiceUnavailable, gin.H{"status": "unhealthy", "db": err.Error()})
+				return
+			}
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
+
 	r.Use(core.GateMiddleware(runtimeCtx))
 
 	// License routes (always accessible, even without license)
@@ -287,10 +300,27 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 		chatwootHandler,
 	).AssignRoutes(r)
 
-	// Webhook do Chatwoot (resposta do agente -> WhatsApp) — PÚBLICO, o Chatwoot
-	// não manda apikey. Configurar em: Chatwoot -> Inbox -> Settings ->
-	// Configuration -> Webhook URL = https://<dominio>/instance/chatwoot/webhook/:instanceId
-	r.POST("/instance/chatwoot/webhook/:instanceId", chatwootHandler.Webhook)
+	// Webhook do Chatwoot (resposta do agente -> WhatsApp). O Chatwoot não manda
+	// apikey, então autenticamos por segredo compartilhado na URL/header:
+	// configure o Webhook URL com ?token=<CHATWOOT_WEBHOOK_SECRET> (ou header
+	// X-Webhook-Token). Sem o env definido, segue aberto (compat) mas avisa —
+	// aberto = qualquer um pode forjar msg e forçar download server-side (SSRF).
+	if config.ChatwootWebhookSecret == "" {
+		log.Printf("[SECURITY] CHATWOOT_WEBHOOK_SECRET não definido — webhook do Chatwoot está PÚBLICO (risco de forja/SSRF). Defina o env e adicione ?token=<segredo> na Webhook URL do Chatwoot.")
+	}
+	r.POST("/instance/chatwoot/webhook/:instanceId", func(c *gin.Context) {
+		if secret := config.ChatwootWebhookSecret; secret != "" {
+			got := c.Query("token")
+			if got == "" {
+				got = c.GetHeader("X-Webhook-Token")
+			}
+			if subtle.ConstantTimeCompare([]byte(got), []byte(secret)) != 1 {
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid webhook token"})
+				return
+			}
+		}
+		chatwootHandler.Webhook(c)
+	})
 
 	// Controle de acesso (usuários/grupos) — rotas /access/*
 	accessService := access_service.NewAccessService(accessRepository, config)
