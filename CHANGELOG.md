@@ -1,5 +1,13 @@
 # Evolution GO - Changelog
 
+## v0.16.18
+
+### Security
+- **Webhook do Chatwoot agora pode exigir segredo compartilhado.** Novo env `CHATWOOT_WEBHOOK_SECRET`: quando definido, o endpoint público `POST /instance/chatwoot/webhook/:instanceId` só aceita requisições com `?token=<segredo>` na URL (ou header `X-Webhook-Token`), comparação constant-time. Fecha os dois vetores da rota aberta: forja de mensagem em nome da instância **e** SSRF via `data_url` dos anexos (download server-side de URL arbitrária). Sem o env, o comportamento antigo é mantido (compatibilidade), mas um aviso `[SECURITY]` é logado no boot. Para ativar: definir o env e acrescentar `?token=<segredo>` na Webhook URL configurada no Chatwoot.
+
+### Features
+- **`GET /healthz`**: health check real que pinga o Postgres de auth (503 se indisponível, 200 se ok). Público e fora do gate de licença, para Traefik/Portainer detectarem instância morta de fato.
+
 ## v0.16.17
 
 ### Features
