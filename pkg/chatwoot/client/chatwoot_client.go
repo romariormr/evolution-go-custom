@@ -293,13 +293,19 @@ func (c *Client) CreateConversation(baseURL, accountId, token, inboxId, sourceId
 // (mensagem real vinda do contato do WhatsApp) — Chatwoot exibe e conta
 // não-lidas de forma diferente pra cada um.
 // Doc: POST /api/v1/accounts/{account_id}/conversations/{conversation_id}/messages
-func (c *Client) SendTextMessage(baseURL, accountId, token, conversationId, content, messageType string) error {
+// sourceId, quando preenchido, marca a mensagem na origem (usamos "WAID:<id da
+// mensagem no WhatsApp>"). Serve pra quebrar loop: o webhook do Chatwoot ignora
+// mensagens que já vieram do WhatsApp, evitando reenviar de volta pro contato.
+func (c *Client) SendTextMessage(baseURL, accountId, token, conversationId, content, messageType, sourceId string) error {
 	url := fmt.Sprintf("%s/api/v1/accounts/%s/conversations/%s/messages", strings.TrimRight(baseURL, "/"), accountId, conversationId)
 
 	body := map[string]any{
 		"content":      content,
 		"message_type": messageType,
 		"private":      false,
+	}
+	if sourceId != "" {
+		body["source_id"] = sourceId
 	}
 
 	_, err := c.doJSON(http.MethodPost, url, token, body)
@@ -309,7 +315,7 @@ func (c *Client) SendTextMessage(baseURL, accountId, token, conversationId, cont
 // SendMediaMessage posta um arquivo (imagem, áudio, vídeo, documento) como anexo
 // numa conversa existente, com legenda opcional. messageType é "incoming"
 // (mídia real vinda do WhatsApp) ou "outgoing" (QR code, avisos de sistema).
-func (c *Client) SendMediaMessage(baseURL, accountId, token, conversationId string, mediaBytes []byte, filename, mimeType, caption, messageType string) error {
+func (c *Client) SendMediaMessage(baseURL, accountId, token, conversationId string, mediaBytes []byte, filename, mimeType, caption, messageType, sourceId string) error {
 	url := fmt.Sprintf("%s/api/v1/accounts/%s/conversations/%s/messages", strings.TrimRight(baseURL, "/"), accountId, conversationId)
 
 	buildRequest := func() (*http.Request, error) {
@@ -321,6 +327,12 @@ func (c *Client) SendMediaMessage(baseURL, accountId, token, conversationId stri
 		}
 		if err := writer.WriteField("message_type", messageType); err != nil {
 			return nil, err
+		}
+		// Mesmo marcador anti-loop do SendTextMessage (ver comentário lá).
+		if sourceId != "" {
+			if err := writer.WriteField("source_id", sourceId); err != nil {
+				return nil, err
+			}
 		}
 
 		// CreateFormFile sempre manda "application/octet-stream" — sem o

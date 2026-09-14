@@ -88,19 +88,27 @@ type chatwootMessageSenderAdapter struct {
 	sendService send_service.SendService
 }
 
-func (a chatwootMessageSenderAdapter) SendText(number, text string, instance *instance_model.Instance) error {
-	_, err := a.sendService.SendText(&send_service.TextStruct{Number: number, Text: text}, instance)
-	return err
+// Devolvem o ID da mensagem no WhatsApp pro chatwoot_service marcar o envio do
+// agente e ignorar o eco fromMe correspondente (anti-loop).
+func (a chatwootMessageSenderAdapter) SendText(number, text string, instance *instance_model.Instance) (string, error) {
+	resp, err := a.sendService.SendText(&send_service.TextStruct{Number: number, Text: text}, instance)
+	if err != nil || resp == nil {
+		return "", err
+	}
+	return resp.Info.ID, nil
 }
 
-func (a chatwootMessageSenderAdapter) SendMedia(number string, data []byte, mediaType, filename, caption string, instance *instance_model.Instance) error {
-	_, err := a.sendService.SendMediaFile(&send_service.MediaStruct{
+func (a chatwootMessageSenderAdapter) SendMedia(number string, data []byte, mediaType, filename, caption string, instance *instance_model.Instance) (string, error) {
+	resp, err := a.sendService.SendMediaFile(&send_service.MediaStruct{
 		Number:   number,
 		Type:     mediaType,
 		Caption:  caption,
 		Filename: filename,
 	}, data, instance)
-	return err
+	if err != nil || resp == nil {
+		return "", err
+	}
+	return resp.Info.ID, nil
 }
 
 func init() {

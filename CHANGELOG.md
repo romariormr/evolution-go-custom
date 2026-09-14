@@ -1,5 +1,15 @@
 # Evolution GO - Changelog
 
+## v0.16.26
+
+### Features
+- **Chatwoot: mensagens ENVIADAS pelo WhatsApp aparecem na conversa.** Antes só o que chegava era espelhado (`!IsFromMe` nas duas guardas do handler), então o que o operador respondia pelo celular não aparecia no Chatwoot — a conversa ficava pela metade. Agora mensagens `fromMe` (texto e mídia) entram na mesma conversa do contato como **`outgoing`**, via os novos `NotifyOutgoingMessage`/`NotifyOutgoingMedia`. Contato novo criado por um envio nosso também usa o nome da agenda.
+
+### Anti-loop (duas travas, mesmo mecanismo da implementação de referência)
+- Toda mensagem espelhada do WhatsApp vai para o Chatwoot com **`source_id = "WAID:<id da mensagem>"`**, e o webhook do Chatwoot **ignora** mensagens com esse prefixo — sem isso, o espelho voltaria pelo webhook e seria reenviado ao contato (loop de mensagens reais).
+- Respostas que o **próprio agente** manda pelo Chatwoot têm o ID do WhatsApp registrado (`markAgentSent`, TTL 10 min) e o eco `fromMe` correspondente é descartado (`consumeAgentSent`) — senão a resposta apareceria duplicada na conversa.
+- Para isso, `MessageSender.SendText`/`SendMedia` passaram a devolver o ID da mensagem no WhatsApp, e `SendTextMessage`/`SendMediaMessage` do cliente Chatwoot aceitam `source_id`.
+
 ## v0.16.25
 
 ### Features
