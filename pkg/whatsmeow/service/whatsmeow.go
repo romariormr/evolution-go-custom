@@ -1585,7 +1585,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 					}
 				}
 
-				if err == nil && len(data) > 0 && mycli.chatwootService != nil && !evt.Info.IsFromMe && !evt.Info.IsGroup {
+				if err == nil && len(data) > 0 && mycli.chatwootService != nil && !evt.Info.IsFromMe && !(evt.Info.IsGroup && mycli.Instance.IgnoreGroups) {
 					chatwootMediaType := ""
 					caption := ""
 					filename := evt.Info.ID + extension
@@ -1758,17 +1758,17 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 			buttonClickMap := map[string]interface{}{
 				"event": "ButtonClick",
 				"data": map[string]interface{}{
-					"buttonId":     buttonClickData["buttonId"],
-					"buttonText":   buttonClickData["buttonText"],
-					"type":         buttonClickData["type"],
-					"phone":        dataMap["Sender"],
-					"jid":          dataMap["Sender"],
-					"pushName":     dataMap["PushName"],
-					"messageId":    dataMap["ID"],
-					"chat":         dataMap["Chat"],
-					"fromMe":       dataMap["FromMe"],
-					"timestamp":    evt.Info.Timestamp.Unix(),
-					"extraData":    buttonClickData,
+					"buttonId":   buttonClickData["buttonId"],
+					"buttonText": buttonClickData["buttonText"],
+					"type":       buttonClickData["type"],
+					"phone":      dataMap["Sender"],
+					"jid":        dataMap["Sender"],
+					"pushName":   dataMap["PushName"],
+					"messageId":  dataMap["ID"],
+					"chat":       dataMap["Chat"],
+					"fromMe":     dataMap["FromMe"],
+					"timestamp":  evt.Info.Timestamp.Unix(),
+					"extraData":  buttonClickData,
 				},
 				"instanceToken": mycli.token,
 				"instanceId":    mycli.userID,
@@ -1786,7 +1786,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 			}
 		}
 
-		if mycli.chatwootService != nil && !evt.Info.IsFromMe && !evt.Info.IsGroup {
+		if mycli.chatwootService != nil && !evt.Info.IsFromMe && !(evt.Info.IsGroup && mycli.Instance.IgnoreGroups) {
 			text := evt.Message.GetConversation()
 			if text == "" {
 				text = evt.Message.GetExtendedTextMessage().GetText()

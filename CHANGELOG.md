@@ -1,5 +1,10 @@
 # Evolution GO - Changelog
 
+## v0.16.23
+
+### Fixes
+- **Chatwoot: destrava o encaminhamento de mensagens de grupo (complemento da 0.16.22).** A 0.16.22 preparou o service pra tratar grupo (contato por identifier, sem telefone), mas as mensagens de grupo eram barradas antes disso, no handler do whatsmeow: as duas guardas que chamam o Chatwoot (texto e mídia) tinham `!evt.Info.IsGroup`, então grupo nunca chegava no `NotifyIncomingMessage`/`NotifyIncomingMedia`. Agora a guarda é `!(IsGroup && IgnoreGroups)`: grupo passa para o Chatwoot, a menos que a instância esteja com "ignorar grupos" ligado (que já corta o processamento antes, por consistência). Sem isso, a mudança da 0.16.22 não tinha efeito para grupos.
+
 ## v0.16.22
 
 ### Features
