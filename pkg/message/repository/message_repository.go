@@ -10,7 +10,7 @@ import (
 
 type MessageRepository interface {
 	InsertMessage(message message_model.Message) error
-	GetMessageByID(messageID string) (*message_model.Message, error)
+	GetMessageByID(messageID, instanceID string) (*message_model.Message, error)
 	DeleteAllMessages() (int64, error)
 	GetLatestMessageID(source string) (string, string, error)
 	GetLatestMessages(sources []string) (map[string]message_model.Message, error)
@@ -86,9 +86,12 @@ func (m *messageRepository) FindMessages(instanceId, remoteJid string, page, lim
 	return messages, total, nil
 }
 
-func (m *messageRepository) GetMessageByID(messageID string) (*message_model.Message, error) {
+func (m *messageRepository) GetMessageByID(messageID, instanceID string) (*message_model.Message, error) {
 	var message message_model.Message
-	err := m.db.Where("message_id = ?", messageID).First(&message).Error
+	// Filtra também por instance_id: sem isso, um apikey de instância comum lê
+	// content/pushName/instanceId de mensagens de OUTRAS instâncias só sabendo o
+	// message_id (que circula em webhooks/integrações). F3 — IDOR entre tenants.
+	err := m.db.Where("message_id = ? AND instance_id = ?", messageID, instanceID).First(&message).Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, nil

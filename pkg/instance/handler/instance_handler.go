@@ -43,6 +43,53 @@ type instanceHandler struct {
 	accessRepository access_repository.AccessRepository
 }
 
+// authorizeGroupInstance restringe rotas AuthAdmin de escopo por instância: quando
+// o apikey é de um Grupo (groupId presente no contexto, posto pelo AuthAdmin), o
+// :instanceId alvo precisa pertencer a esse grupo. Com a chave global (sem groupId)
+// o acesso é total. Em caso de negação já responde 403 e retorna false — o handler
+// deve dar return. Fecha o F1 (IDOR cross-tenant nos endpoints administrativos).
+func (i *instanceHandler) authorizeGroupInstance(ctx *gin.Context, instanceId string) bool {
+	groupIdVal, ok := ctx.Get("groupId")
+	if !ok {
+		return true // chave global — acesso total
+	}
+	groupId, _ := groupIdVal.(string)
+	allowedIds, err := i.accessRepository.InstanceIdsForGroups([]string{groupId})
+	if err != nil {
+		ctx.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to verify group ownership"})
+		return false
+	}
+	for _, id := range allowedIds {
+		if id == instanceId {
+			return true
+		}
+	}
+	ctx.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "instance does not belong to your group"})
+	return false
+}
+
+// authorizeSameInstance restringe rotas do middleware Auth (apikey de instância):
+// o :instanceId do path precisa ser a MESMA instância autenticada pelo apikey
+// (ctx "instance"). Impede que o apikey de uma instância leia/altere outra só
+// trocando o id na URL. Já responde 403 e retorna false se divergir. Fecha o F2.
+func authorizeSameInstance(ctx *gin.Context, instanceId string) bool {
+	v, ok := ctx.Get("instance")
+	if !ok {
+		ctx.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "not authorized"})
+		return false
+	}
+	inst, ok := v.(*instance_model.Instance)
+	if !ok || inst == nil {
+		ctx.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "not authorized"})
+		return false
+	}
+	if inst.Id != instanceId {
+		ctx.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "instanceId does not match authenticated instance"})
+		return false
+	}
+	return true
+}
+
 // Create a new instance
 // @Summary Create a new instance
 // @Description Creates a new instance with the provided data including optional advanced settings
@@ -394,6 +441,10 @@ func (i *instanceHandler) Info(ctx *gin.Context) {
 		return
 	}
 
+	if !i.authorizeGroupInstance(ctx, instanceId) {
+		return
+	}
+
 	instance, err := i.instanceService.Info(instanceId)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -418,6 +469,10 @@ func (i *instanceHandler) Limits(ctx *gin.Context) {
 
 	if instanceId == "" {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "instanceId is required"})
+		return
+	}
+
+	if !i.authorizeGroupInstance(ctx, instanceId) {
 		return
 	}
 
@@ -449,6 +504,10 @@ func (i *instanceHandler) Delete(ctx *gin.Context) {
 		return
 	}
 
+	if !i.authorizeGroupInstance(ctx, instanceId) {
+		return
+	}
+
 	err := i.instanceService.Delete(instanceId)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -475,6 +534,10 @@ func (i *instanceHandler) SetProxy(ctx *gin.Context) {
 
 	if instanceId == "" {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "instanceId is required"})
+		return
+	}
+
+	if !i.authorizeGroupInstance(ctx, instanceId) {
 		return
 	}
 
@@ -531,6 +594,10 @@ func (i *instanceHandler) DeleteProxy(ctx *gin.Context) {
 		return
 	}
 
+	if !i.authorizeGroupInstance(ctx, instanceId) {
+		return
+	}
+
 	err := i.instanceService.RemoveProxy(instanceId)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -557,6 +624,10 @@ func (i *instanceHandler) ForceReconnect(ctx *gin.Context) {
 
 	if instanceId == "" {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "instanceId is required"})
+		return
+	}
+
+	if !i.authorizeGroupInstance(ctx, instanceId) {
 		return
 	}
 
@@ -593,6 +664,10 @@ type GetLogsQuery struct {
 
 func (h *instanceHandler) GetLogs(c *gin.Context) {
 	instanceId := c.Param("instanceId")
+
+	if !h.authorizeGroupInstance(c, instanceId) {
+		return
+	}
 
 	var query GetLogsQuery
 	if err := c.ShouldBindQuery(&query); err != nil {
@@ -646,6 +721,10 @@ func (h *instanceHandler) GetAdvancedSettings(c *gin.Context) {
 		return
 	}
 
+	if !authorizeSameInstance(c, instanceId) {
+		return
+	}
+
 	settings, err := h.instanceService.GetAdvancedSettings(instanceId)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -673,6 +752,10 @@ func (h *instanceHandler) UpdateAdvancedSettings(c *gin.Context) {
 
 	if instanceId == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "instanceId is required"})
+		return
+	}
+
+	if !authorizeSameInstance(c, instanceId) {
 		return
 	}
 
@@ -707,6 +790,10 @@ func (h *instanceHandler) AddWebhook(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if !authorizeSameInstance(c, instanceId) {
+		return
+	}
+
 	instance, err := h.instanceService.AddWebhook(instanceId, body.URL)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -728,6 +815,10 @@ func (h *instanceHandler) RemoveWebhook(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if !authorizeSameInstance(c, instanceId) {
+		return
+	}
+
 	instance, err := h.instanceService.RemoveWebhook(instanceId, body.URL)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -742,6 +833,10 @@ func (h *instanceHandler) ListWebhooks(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "instanceId is required"})
 		return
 	}
+	if !authorizeSameInstance(c, instanceId) {
+		return
+	}
+
 	webhooks, err := h.instanceService.ListWebhooks(instanceId)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

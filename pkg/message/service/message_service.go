@@ -354,7 +354,7 @@ func (m *messageService) GetMessageStatus(data *MessageStatusStruct, instance *i
 
 	var ts time.Time
 
-	result, err := m.messageRepository.GetMessageByID(data.Id)
+	result, err := m.messageRepository.GetMessageByID(data.Id, instance.Id)
 	if err != nil {
 		return nil, "", err
 	}

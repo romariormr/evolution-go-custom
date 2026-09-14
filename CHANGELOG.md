@@ -1,5 +1,14 @@
 # Evolution GO - Changelog
 
+## v0.16.19
+
+### Security
+Correção dos 3 achados críticos/altos de isolamento entre tenants da auditoria de segurança (commit 3f1b7e5), IDOR cross-tenant:
+
+- **F1 (Crítica) — endpoints administrativos de `/instance/*` agora filtram por grupo.** Os 7 handlers sob `AuthAdmin` (`Info`, `Delete`, `SetProxy`, `DeleteProxy`, `ForceReconnect`, `GetLogs`, `Limits`) usavam o `:instanceId` do path sem checar se a instância pertence ao grupo do apikey. Um apikey de Grupo A conseguia ler o token completo, deletar, redirecionar proxy (MITM), forçar reconexão e ler logs de instâncias de qualquer outro grupo. Novo guard `authorizeGroupInstance`: com chave de Grupo valida via `InstanceIdsForGroups` que o alvo é do grupo (403 senão); com a chave global segue com acesso total.
+- **F2 (Crítica) — rotas de instância sob `Auth` agora exigem que o `:instanceId` seja a própria instância autenticada.** 9 endpoints (`advanced-settings` GET/PUT, `webhooks` GET/POST/DELETE, `chatwoot` GET/POST/DELETE/reset-status) confiavam no id do path em vez do apikey. Qualquer apikey de uma única instância comum lia/alterava advanced-settings, cadastrava webhook espião ou lia a config do Chatwoot de qualquer outra instância. Novo guard `authorizeSameInstance`/`ensureSameInstance` compara o path com `ctx "instance"` (403 se divergir).
+- **F3 (Alta) — `GET /message/status` não vaza mais mensagens de outras instâncias.** `GetMessageByID` buscava só por `message_id` (único global); agora filtra também por `instance_id`. A assinatura passou a `GetMessageByID(messageID, instanceID string)`.
+
 ## v0.16.18
 
 ### Security
