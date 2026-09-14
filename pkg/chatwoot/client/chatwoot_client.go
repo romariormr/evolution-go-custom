@@ -50,6 +50,40 @@ func (c *Client) CreateInbox(baseURL, accountId, token, inboxName string) (strin
 	return fmt.Sprintf("%d", parsed.Id), nil
 }
 
+// InboxExists checa se a inbox ainda existe na conta do Chatwoot. Serve pra
+// self-heal: se a inbox salva na config foi deletada no Chatwoot, o InboxId fica
+// órfão e toda criação de contato/conversa nela dá 404 "Resource could not be
+// found". Retorna (true, nil) se existe, (false, nil) se 404, e erro em falha de
+// rede/outros status (nesse caso o chamador NÃO deve assumir que sumiu).
+// Doc: GET /api/v1/accounts/{account_id}/inboxes/{inbox_id}
+func (c *Client) InboxExists(baseURL, accountId, token, inboxId string) (bool, error) {
+	if inboxId == "" {
+		return false, nil
+	}
+	url := fmt.Sprintf("%s/api/v1/accounts/%s/inboxes/%s", strings.TrimRight(baseURL, "/"), accountId, inboxId)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("api_access_token", token)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	switch {
+	case resp.StatusCode == http.StatusOK:
+		return true, nil
+	case resp.StatusCode == http.StatusNotFound:
+		return false, nil
+	default:
+		return false, fmt.Errorf("chatwoot retornou %d ao verificar inbox %s: %s", resp.StatusCode, inboxId, string(body))
+	}
+}
+
 // retryDelays define o backoff entre tentativas — falha de rede/instabilidade
 // pontual do Chatwoot não pode virar mensagem perdida silenciosamente.
 var retryDelays = []time.Duration{500 * time.Millisecond, 2 * time.Second}

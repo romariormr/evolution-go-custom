@@ -196,19 +196,38 @@ func (s *chatwootService) SetConfig(instanceId string, input SetConfigStruct) (*
 	}
 
 	var inboxWarning string
-	if cfg.Enabled && cfg.AutoCreate && cfg.InboxId == "" {
-		inboxName := cfg.NameInbox
-		if inboxName == "" {
-			inboxName = instanceId
+	if cfg.Enabled && cfg.AutoCreate {
+		// (Re)cria a inbox quando não há uma salva OU quando a salva não existe
+		// mais no Chatwoot (foi deletada). Sem a verificação, um InboxId órfão
+		// (ex.: inbox deletada e recriada no Chatwoot) fica travado e toda criação
+		// de contato/conversa nele dá 404 "Resource could not be found" em loop —
+		// salvar de novo não resolvia porque InboxId != "". Falha de rede na
+		// verificação NÃO conta como "sumiu" (mantém a inbox atual, não recria à toa).
+		needCreate := cfg.InboxId == ""
+		if !needCreate {
+			exists, err := s.client.InboxExists(cfg.Url, cfg.AccountId, cfg.Token, cfg.InboxId)
+			if err != nil {
+				logger.LogWarn("[%s] chatwoot: não foi possível verificar a inbox %s (mantendo): %v", instanceId, cfg.InboxId, err)
+			} else if !exists {
+				logger.LogWarn("[%s] chatwoot: inbox %s da config não existe mais no Chatwoot — recriando", instanceId, cfg.InboxId)
+				needCreate = true
+			}
 		}
-		inboxId, err := s.client.CreateInbox(cfg.Url, cfg.AccountId, cfg.Token, inboxName)
-		if err != nil {
-			logger.LogWarn("[%s] falha ao criar inbox no Chatwoot automaticamente: %v", instanceId, err)
-			inboxWarning = fmt.Sprintf("config salva, mas não foi possível criar a inbox automaticamente no Chatwoot: %v", err)
-		} else {
-			cfg.InboxId = inboxId
-			if err := s.repo.Upsert(cfg); err != nil {
-				logger.LogWarn("[%s] inbox criada (id=%s) mas falha ao salvar inboxId: %v", instanceId, inboxId, err)
+
+		if needCreate {
+			inboxName := cfg.NameInbox
+			if inboxName == "" {
+				inboxName = instanceId
+			}
+			inboxId, err := s.client.CreateInbox(cfg.Url, cfg.AccountId, cfg.Token, inboxName)
+			if err != nil {
+				logger.LogWarn("[%s] falha ao criar inbox no Chatwoot automaticamente: %v", instanceId, err)
+				inboxWarning = fmt.Sprintf("config salva, mas não foi possível criar a inbox automaticamente no Chatwoot: %v", err)
+			} else {
+				cfg.InboxId = inboxId
+				if err := s.repo.Upsert(cfg); err != nil {
+					logger.LogWarn("[%s] inbox criada (id=%s) mas falha ao salvar inboxId: %v", instanceId, inboxId, err)
+				}
 			}
 		}
 	}

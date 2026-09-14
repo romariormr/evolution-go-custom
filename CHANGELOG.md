@@ -1,5 +1,10 @@
 # Evolution GO - Changelog
 
+## v0.16.21
+
+### Fixes
+- **Chatwoot: inbox órfã agora se auto-recupera ao salvar a config.** Se a inbox referenciada pela config (`InboxId`) foi deletada no Chatwoot, o id ficava órfão e toda criação de contato/conversa/mensagem nela dava `404 Resource could not be found` em loop — e salvar de novo não resolvia, porque a criação automática só rodava quando `InboxId` estava vazio. Agora, com `Auto Create` ligado, o `SetConfig` verifica via `GET /api/v1/accounts/{id}/inboxes/{inboxId}` se a inbox ainda existe; se retornar 404, recria a inbox e grava o novo id. Falha de rede na verificação não conta como "sumiu" (mantém a inbox atual). Novo método `Client.InboxExists`. **Correção**: reabrir as Configurações do Chatwoot da instância e clicar **Salvar Chatwoot** — a inbox é recriada e a conexão volta.
+
 ## v0.16.20
 
 ### Fixes
