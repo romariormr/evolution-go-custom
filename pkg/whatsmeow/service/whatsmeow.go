@@ -136,6 +136,27 @@ type Values struct {
 	m map[string]string
 }
 
+// groupNameCache guarda o assunto (nome) de cada grupo por (instanceId|jid) pra
+// não bater GetGroupInfo no servidor a cada mensagem (rate-limit/ban em tráfego
+// alto de grupo). Nome de grupo muda raramente; cache sem expiração é aceitável
+// (reinício repovoa). Usado só pra rotular a conversa do grupo no Chatwoot.
+var groupNameCache sync.Map
+
+func resolveGroupName(cli *whatsmeow.Client, instanceId string, chat types.JID) string {
+	key := instanceId + "|" + chat.String()
+	if v, ok := groupNameCache.Load(key); ok {
+		return v.(string)
+	}
+	name := ""
+	if cli != nil {
+		if info, err := cli.GetGroupInfo(context.Background(), chat); err == nil {
+			name = info.GroupName.Name
+		}
+	}
+	groupNameCache.Store(key, name)
+	return name
+}
+
 func (v Values) Get(key string) string {
 	return v.m[key]
 }
@@ -1585,7 +1606,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 					}
 				}
 
-				if err == nil && len(data) > 0 && mycli.chatwootService != nil && !evt.Info.IsFromMe && !(evt.Info.IsGroup && mycli.Instance.IgnoreGroups) {
+				if err == nil && len(data) > 0 && mycli.chatwootService != nil && !evt.Info.IsFromMe {
 					chatwootMediaType := ""
 					caption := ""
 					filename := evt.Info.ID + extension
@@ -1613,8 +1634,14 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 						pushName := evt.Info.PushName
 						mediaBytes := data
 						mediaMime := mimeType
+						isGrp := evt.Info.IsGroup
+						chat := evt.Info.Chat
 						go func() {
-							_ = mycli.chatwootService.NotifyIncomingMedia(mycli.Instance.Id, jid, pushName, mediaBytes, mediaMime, filename, caption)
+							groupName := ""
+							if isGrp {
+								groupName = resolveGroupName(mycli.WAClient, mycli.Instance.Id, chat)
+							}
+							_ = mycli.chatwootService.NotifyIncomingMedia(mycli.Instance.Id, jid, pushName, mediaBytes, mediaMime, filename, caption, groupName)
 						}()
 					}
 				}
@@ -1786,7 +1813,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 			}
 		}
 
-		if mycli.chatwootService != nil && !evt.Info.IsFromMe && !(evt.Info.IsGroup && mycli.Instance.IgnoreGroups) {
+		if mycli.chatwootService != nil && !evt.Info.IsFromMe {
 			text := evt.Message.GetConversation()
 			if text == "" {
 				text = evt.Message.GetExtendedTextMessage().GetText()
@@ -1794,8 +1821,16 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 			if text != "" {
 				jid := evt.Info.Chat.String()
 				pushName := evt.Info.PushName
+				isGrp := evt.Info.IsGroup
+				chat := evt.Info.Chat
 				go func() {
-					_ = mycli.chatwootService.NotifyIncomingMessage(mycli.Instance.Id, jid, pushName, text)
+					groupName := ""
+					if isGrp {
+						groupName = resolveGroupName(mycli.WAClient, mycli.Instance.Id, chat)
+					}
+					// O filtro de grupo por instância fica na config do Chatwoot
+					// (IgnoreGroups), checado dentro do NotifyIncomingMessage.
+					_ = mycli.chatwootService.NotifyIncomingMessage(mycli.Instance.Id, jid, pushName, text, groupName)
 				}()
 			}
 		}

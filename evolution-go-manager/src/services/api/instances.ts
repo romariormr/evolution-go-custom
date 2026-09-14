@@ -372,6 +372,7 @@ export interface ChatwootConfig {
   importMessages: boolean;
   daysLimitImportMessages: number;
   autoCreate: boolean;
+  ignoreGroups?: boolean;
   inboxId?: string;
 }
 

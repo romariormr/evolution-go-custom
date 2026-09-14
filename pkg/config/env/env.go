@@ -11,6 +11,7 @@ const (
 	DATABASE_SAVE_MESSAGES         = "DATABASE_SAVE_MESSAGES"
 	GLOBAL_API_KEY                 = "GLOBAL_API_KEY"
 	CHATWOOT_WEBHOOK_SECRET        = "CHATWOOT_WEBHOOK_SECRET"
+	SERVER_URL                     = "SERVER_URL"
 	WA_DEBUG                       = "DEBUG_ENABLED"
 	LOGTYPE                        = "LOG_TYPE"
 	WEBHOOKFILES                   = "WEBHOOK_FILES"

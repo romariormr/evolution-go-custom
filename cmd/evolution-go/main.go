@@ -197,7 +197,7 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 
 	chatwootRepository := chatwoot_repository.NewChatwootRepository(db)
 	chatwootContactMapRepository := chatwoot_repository.NewChatwootContactMapRepository(db)
-	chatwootService := chatwoot_service.NewChatwootService(chatwootRepository, chatwootContactMapRepository, instanceRepository)
+	chatwootService := chatwoot_service.NewChatwootService(chatwootRepository, chatwootContactMapRepository, instanceRepository, config.ServerUrl)
 	chatwootHandler := chatwoot_handler.NewChatwootHandler(chatwootService)
 
 	whatsmeowService := whatsmeow_service.NewWhatsmeowService(

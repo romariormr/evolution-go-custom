@@ -37,6 +37,7 @@ type Config struct {
 	DatabaseSaveMessages        bool
 	GlobalApiKey                string
 	ChatwootWebhookSecret       string
+	ServerUrl                   string
 	WaDebug                     string
 	LogType                     string
 	WebhookFiles                bool
@@ -246,6 +247,10 @@ func Load() *Config {
 	// o webhook segue aberto (compatibilidade) mas loga aviso no boot.
 	chatwootWebhookSecret := os.Getenv(config_env.CHATWOOT_WEBHOOK_SECRET)
 
+	// URL pública deste Evolution GO (ex.: https://evolutiongo.exemplo.com), usada
+	// pra auto-configurar o webhook da inbox do Chatwoot (two-way). Opcional.
+	serverUrl := os.Getenv(config_env.SERVER_URL)
+
 	clientName := os.Getenv(config_env.CLIENT_NAME)
 
 	waDebug := os.Getenv(config_env.WA_DEBUG)
@@ -389,6 +394,7 @@ func Load() *Config {
 		DatabaseSaveMessages:        databaseSaveMessages == "true",
 		GlobalApiKey:                globalApiKey,
 		ChatwootWebhookSecret:       chatwootWebhookSecret,
+		ServerUrl:                   serverUrl,
 		WaDebug:                     waDebug,
 		LogType:                     logType,
 		WebhookFiles:                webhookFiles == "true",
