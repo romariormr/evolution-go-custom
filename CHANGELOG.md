@@ -1,5 +1,15 @@
 # Evolution GO - Changelog
 
+## v0.16.27
+
+### Fixes
+Trocar ou recriar a inbox do Chatwoot deixava a maioria das conversas invisível. Eram três causas somadas:
+
+- **Contato que já existe na conta não era reaproveitado na inbox nova.** Ao recriar a inbox, o `POST /contacts` falha (o contato já existe na conta, vinculado à inbox antiga) e o fallback só aceitava um contato que já tivesse vínculo com a inbox *atual* — resultado: `contato +55... (inbox 77) não encontrado no chatwoot após falha ao criar`, e a mensagem sumia. Agora a busca devolve o contato mesmo sem vínculo e o novo `EnsureContactInbox` cria o `contact_inbox` da inbox atual (`POST /contacts/{id}/contact_inboxes`), obtendo o `source_id` necessário para abrir a conversa.
+- **Busca de contato agora casa por telefone (1:1) ou por identifier (grupo).** Antes só por telefone, então grupo (que não tem telefone) nunca era reencontrado. A query vai escapada.
+- **Cache de conversa passou a ser por inbox.** `ChatwootContactMap` ganhou `InboxId`: a conversa cacheada só é reaproveitada se for da inbox atual. Sem isso, depois de trocar de inbox as mensagens continuavam indo para conversas da inbox antiga (às vezes já deletada) e não apareciam. Registros antigos têm `InboxId` vazio e são recriados uma vez, automaticamente — não é mais preciso limpar a tabela na mão.
+- **`phone_number` vazio não é mais enviado** na criação de contato de grupo (o Chatwoot recusa string vazia).
+
 ## v0.16.26
 
 ### Features

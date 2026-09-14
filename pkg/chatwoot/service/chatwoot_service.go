@@ -431,7 +431,12 @@ func (s *chatwootService) ensureRealContactConversation(cfg *chatwoot_model.Chat
 	unlock := s.lockContact(cfg.InstanceId, jid)
 	defer unlock()
 
-	if existing, err := s.contactMapRepo.GetByJid(cfg.InstanceId, jid); err == nil && existing.ChatwootConversationId != "" {
+	// Só reaproveita a conversa cacheada se ela for da inbox ATUAL. Depois de
+	// trocar/recriar a inbox, as conversas antigas vivem na inbox velha (às vezes
+	// deletada) — reusá-las faz a mensagem sumir da vista. Cache de versões
+	// anteriores vem com InboxId vazio e também é descartado (recria uma vez).
+	if existing, err := s.contactMapRepo.GetByJid(cfg.InstanceId, jid); err == nil &&
+		existing.ChatwootConversationId != "" && existing.InboxId == cfg.InboxId {
 		return existing.ChatwootConversationId, nil
 	}
 
@@ -469,6 +474,7 @@ func (s *chatwootService) ensureRealContactConversation(cfg *chatwoot_model.Chat
 		Jid:                    jid,
 		ChatwootContactId:      contactId,
 		ChatwootConversationId: conversationId,
+		InboxId:                cfg.InboxId,
 	}
 	if err := s.contactMapRepo.Upsert(mapping); err != nil {
 		logger.LogWarn("[%s] contato/conversa criados (jid=%s) mas falha ao cachear: %v", cfg.InstanceId, jid, err)
