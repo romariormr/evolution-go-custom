@@ -1,5 +1,10 @@
 # Evolution GO - Changelog
 
+## v0.16.25
+
+### Features
+- **Chatwoot: contato 1:1 usa o nome salvo na agenda.** Antes o contato era criado com o PushName (nome que o próprio contato define). Agora, para conversa 1:1, o Evolution GO usa o nome do contato como está na agenda do WhatsApp (`FullName` do contact store local, sincronizado), caindo pro PushName e depois pro número quando não há nome salvo. Novo helper `resolveContactName` (lê o store local, sem chamada de rede). Grupos continuam usando o assunto do grupo (`"<nome> (GRUPO)"`) e o autor de cada mensagem no corpo.
+
 ## v0.16.24
 
 ### Features

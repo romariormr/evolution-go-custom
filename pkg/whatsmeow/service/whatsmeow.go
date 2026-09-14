@@ -142,6 +142,25 @@ type Values struct {
 // (reinício repovoa). Usado só pra rotular a conversa do grupo no Chatwoot.
 var groupNameCache sync.Map
 
+// resolveContactName pega o nome do contato como está salvo na agenda (FullName
+// do contact store, sincronizado do WhatsApp), caindo pro PushName e por fim pro
+// fallback. GetContact lê o store local (sqlite), não é chamada de rede — pode
+// rodar por mensagem sem custo. Usado só pra rotular o contato 1:1 no Chatwoot.
+func resolveContactName(cli *whatsmeow.Client, jid types.JID, fallback string) string {
+	if cli == nil || cli.Store == nil || cli.Store.Contacts == nil {
+		return fallback
+	}
+	if ci, err := cli.Store.Contacts.GetContact(context.Background(), jid); err == nil {
+		if ci.FullName != "" {
+			return ci.FullName
+		}
+		if ci.PushName != "" {
+			return ci.PushName
+		}
+	}
+	return fallback
+}
+
 func resolveGroupName(cli *whatsmeow.Client, instanceId string, chat types.JID) string {
 	key := instanceId + "|" + chat.String()
 	if v, ok := groupNameCache.Load(key); ok {
@@ -1638,10 +1657,13 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 						chat := evt.Info.Chat
 						go func() {
 							groupName := ""
+							senderName := pushName
 							if isGrp {
 								groupName = resolveGroupName(mycli.WAClient, mycli.Instance.Id, chat)
+							} else {
+								senderName = resolveContactName(mycli.WAClient, chat, pushName)
 							}
-							_ = mycli.chatwootService.NotifyIncomingMedia(mycli.Instance.Id, jid, pushName, mediaBytes, mediaMime, filename, caption, groupName)
+							_ = mycli.chatwootService.NotifyIncomingMedia(mycli.Instance.Id, jid, senderName, mediaBytes, mediaMime, filename, caption, groupName)
 						}()
 					}
 				}
@@ -1825,12 +1847,16 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 				chat := evt.Info.Chat
 				go func() {
 					groupName := ""
+					senderName := pushName
 					if isGrp {
 						groupName = resolveGroupName(mycli.WAClient, mycli.Instance.Id, chat)
+					} else {
+						// 1:1: usa o nome salvo na agenda (FullName) em vez do PushName.
+						senderName = resolveContactName(mycli.WAClient, chat, pushName)
 					}
 					// O filtro de grupo por instância fica na config do Chatwoot
 					// (IgnoreGroups), checado dentro do NotifyIncomingMessage.
-					_ = mycli.chatwootService.NotifyIncomingMessage(mycli.Instance.Id, jid, pushName, text, groupName)
+					_ = mycli.chatwootService.NotifyIncomingMessage(mycli.Instance.Id, jid, senderName, text, groupName)
 				}()
 			}
 		}
