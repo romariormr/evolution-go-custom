@@ -6,9 +6,32 @@ import (
 	"net/http"
 
 	chatwoot_service "github.com/EvolutionAPI/evolution-go/pkg/chatwoot/service"
+	instance_model "github.com/EvolutionAPI/evolution-go/pkg/instance/model"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
+
+// ensureSameInstance garante que o :instanceId do path é a instância autenticada
+// pelo apikey (ctx "instance", posto pelo middleware Auth). Sem isso, qualquer
+// apikey de instância mexeria na config de Chatwoot de outra instância só trocando
+// o id na URL (F2 — IDOR). Já responde e retorna false se divergir.
+func ensureSameInstance(ctx *gin.Context, instanceId string) bool {
+	v, ok := ctx.Get("instance")
+	if !ok {
+		ctx.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "not authorized"})
+		return false
+	}
+	inst, ok := v.(*instance_model.Instance)
+	if !ok || inst == nil {
+		ctx.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "not authorized"})
+		return false
+	}
+	if inst.Id != instanceId {
+		ctx.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "instanceId does not match authenticated instance"})
+		return false
+	}
+	return true
+}
 
 type ChatwootHandler interface {
 	GetConfig(ctx *gin.Context)
@@ -41,6 +64,10 @@ func (h *chatwootHandler) GetConfig(ctx *gin.Context) {
 		return
 	}
 
+	if !ensureSameInstance(ctx, instanceId) {
+		return
+	}
+
 	cfg, err := h.service.GetConfig(instanceId)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -68,6 +95,10 @@ func (h *chatwootHandler) SetConfig(ctx *gin.Context) {
 	instanceId := ctx.Param("instanceId")
 	if instanceId == "" {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "instanceId is required"})
+		return
+	}
+
+	if !ensureSameInstance(ctx, instanceId) {
 		return
 	}
 
@@ -104,6 +135,10 @@ func (h *chatwootHandler) DeleteConfig(ctx *gin.Context) {
 		return
 	}
 
+	if !ensureSameInstance(ctx, instanceId) {
+		return
+	}
+
 	if err := h.service.DeleteConfig(instanceId); err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -125,6 +160,10 @@ func (h *chatwootHandler) ResetStatusConversation(ctx *gin.Context) {
 	instanceId := ctx.Param("instanceId")
 	if instanceId == "" {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "instanceId is required"})
+		return
+	}
+
+	if !ensureSameInstance(ctx, instanceId) {
 		return
 	}
 
