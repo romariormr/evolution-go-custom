@@ -33,6 +33,11 @@ type ChatwootConfig struct {
 
 	AutoCreate bool `json:"autoCreate" gorm:"default:true"`
 
+	// IgnoreGroups controla se mensagens de GRUPO (@g.us) são espelhadas no
+	// Chatwoot. Padrão false (grupos aparecem). Marcado no manager na tela de
+	// config do Chatwoot — desligar tira os grupos da inbox sem afetar 1:1.
+	IgnoreGroups bool `json:"ignoreGroups" gorm:"default:false"`
+
 	// InboxId é preenchido internamente quando AutoCreate cria a inbox no Chatwoot —
 	// não é informado pelo usuário.
 	InboxId string `json:"inboxId" gorm:"default:''"`

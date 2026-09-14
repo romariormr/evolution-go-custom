@@ -27,14 +27,21 @@ func NewClient() *Client {
 // receber/enviar mensagens da instância WhatsApp via API própria (sem canal oficial
 // da Meta). Retorna o InboxId criado.
 // Doc: POST /api/v1/accounts/{account_id}/inboxes (Channel::Api)
-func (c *Client) CreateInbox(baseURL, accountId, token, inboxName string) (string, error) {
+func (c *Client) CreateInbox(baseURL, accountId, token, inboxName, webhookURL string) (string, error) {
 	url := fmt.Sprintf("%s/api/v1/accounts/%s/inboxes", strings.TrimRight(baseURL, "/"), accountId)
 
+	channel := map[string]any{
+		"type": "api",
+	}
+	// webhook_url na inbox tipo "api" faz o Chatwoot mandar as respostas do agente
+	// de volta pro Evolution GO automaticamente (two-way sem config manual).
+	if webhookURL != "" {
+		channel["webhook_url"] = webhookURL
+	}
+
 	respBody, err := c.doJSON(http.MethodPost, url, token, map[string]any{
-		"name": inboxName,
-		"channel": map[string]any{
-			"type": "api",
-		},
+		"name":    inboxName,
+		"channel": channel,
 	})
 	if err != nil {
 		return "", err

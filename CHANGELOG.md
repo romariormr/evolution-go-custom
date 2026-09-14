@@ -1,5 +1,17 @@
 # Evolution GO - Changelog
 
+## v0.16.24
+
+### Features
+Melhorias na integração Chatwoot, aprendidas da implementação de referência (evolution-api Node):
+
+- **#1 — Webhook da inbox auto-configurado (two-way sem config manual).** Novo env `SERVER_URL` (URL pública deste Evolution GO, ex.: `https://evolutiongo.exemplo.com`). Quando definido, o `CreateInbox` cria a inbox tipo `api` já com `webhook_url = <SERVER_URL>/instance/chatwoot/webhook/<instanceId>`, então a resposta do agente no Chatwoot volta pro WhatsApp automaticamente — sem precisar configurar o webhook na mão. Sem o env, comportamento antigo (webhook manual).
+- **#2 — Nome real do grupo na conversa.** O contato do grupo no Chatwoot passa a usar o assunto real do grupo (`"<nome do grupo> (GRUPO)"`) em vez de `"Grupo <id>"`. O nome é resolvido via `GetGroupInfo` e **cacheado por (instância, grupo)** para não bater no servidor a cada mensagem (evita rate-limit/ban em tráfego alto de grupo).
+- **#3 — Toggle "Ignorar Grupos" na config do Chatwoot.** Novo campo `ignoreGroups` na config (checkbox no manager, tela de Chatwoot). Marcado, as mensagens de grupo deixam de ser espelhadas no Chatwoot (1:1 continua). Filtro aplicado em `NotifyIncomingMessage`/`NotifyIncomingMedia`. A coluna `ignore_groups` é criada via AutoMigrate.
+
+### Notes
+- Para ativar o #1, defina `SERVER_URL` no ambiente do serviço e salve a config do Chatwoot novamente (a inbox é recriada/atualizada com o webhook). A verificação de segredo do webhook (`CHATWOOT_WEBHOOK_SECRET`, v0.16.18) continua válida — se usar, inclua `?token=` na URL.
+
 ## v0.16.23
 
 ### Fixes

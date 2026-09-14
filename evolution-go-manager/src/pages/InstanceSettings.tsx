@@ -40,6 +40,7 @@ const chatwootSchema = z.object({
   importMessages: z.boolean().optional(),
   daysLimitImportMessages: z.coerce.number().optional(),
   autoCreate: z.boolean().optional(),
+  ignoreGroups: z.boolean().optional(),
 });
 
 type WebhookFormData = z.infer<typeof webhookSchema>;
@@ -284,6 +285,7 @@ export default function InstanceSettings() {
           importMessages: data.importMessages || false,
           daysLimitImportMessages: data.daysLimitImportMessages || 0,
           autoCreate: data.autoCreate ?? true,
+          ignoreGroups: data.ignoreGroups || false,
         }
       );
 
@@ -763,6 +765,7 @@ export default function InstanceSettings() {
                       ["importContacts", "Import Contacts", "Importa contatos do WhatsApp pro Chatwoot"],
                       ["importMessages", "Import Messages", "Importa histórico de mensagens ao conectar"],
                       ["autoCreate", "Auto Create", "Cria a inbox automaticamente no Chatwoot ao salvar"],
+                      ["ignoreGroups", "Ignorar Grupos", "Não espelha mensagens de grupo no Chatwoot"],
                     ] as const
                   ).map(([field, label, help]) => (
                     <div key={field} className="flex items-center justify-between">

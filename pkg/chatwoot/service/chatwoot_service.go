@@ -34,6 +34,7 @@ type SetConfigStruct struct {
 	ImportMessages          bool   `json:"importMessages"`
 	DaysLimitImportMessages int    `json:"daysLimitImportMessages"`
 	AutoCreate              bool   `json:"autoCreate"`
+	IgnoreGroups            bool   `json:"ignoreGroups"`
 }
 
 type ChatwootService interface {
@@ -63,13 +64,13 @@ type ChatwootService interface {
 	// NotifyIncomingMessage repassa uma mensagem de texto recebida no WhatsApp pro
 	// Chatwoot, criando contato/conversa do contato real (por JID) se ainda não
 	// existir. No-op silencioso se a instância não tem Chatwoot habilitado.
-	NotifyIncomingMessage(instanceId, jid, senderName, text string) error
+	NotifyIncomingMessage(instanceId, jid, senderName, text, groupName string) error
 
 	// NotifyIncomingMedia é a versão do NotifyIncomingMessage pra mídia (imagem,
 	// áudio, vídeo, documento) — mimeType é o Content-Type real (ex.: "audio/ogg"),
 	// necessário pro Chatwoot renderizar o anexo certo (player de áudio/vídeo/
 	// imagem) em vez de link de download genérico.
-	NotifyIncomingMedia(instanceId, jid, senderName string, data []byte, mimeType, filename, caption string) error
+	NotifyIncomingMedia(instanceId, jid, senderName string, data []byte, mimeType, filename, caption, groupName string) error
 
 	// HandleAgentReply processa o webhook do Chatwoot quando um agente responde
 	// numa conversa — resolve o JID a partir da conversa e reenvia pro WhatsApp
@@ -129,6 +130,11 @@ type chatwootService struct {
 	client         *chatwoot_client.Client
 	sender         MessageSender
 
+	// serverURL é a URL pública deste Evolution GO (env SERVER_URL), usada pra
+	// montar o webhook_url da inbox no Chatwoot (resposta do agente -> WhatsApp
+	// automática). Vazio = não seta webhook (usuário configura manual).
+	serverURL string
+
 	// contactLocks serializa find-or-create por (instanceId, jid) — sem isso,
 	// duas mensagens quase simultâneas do mesmo contato podem criar dois
 	// contatos/conversas duplicados no Chatwoot (bug real que o evolution-api
@@ -137,12 +143,13 @@ type chatwootService struct {
 	contactLocks sync.Map
 }
 
-func NewChatwootService(repo chatwoot_repository.ChatwootRepository, contactMapRepo chatwoot_repository.ChatwootContactMapRepository, instanceRepo instance_repository.InstanceRepository) ChatwootService {
+func NewChatwootService(repo chatwoot_repository.ChatwootRepository, contactMapRepo chatwoot_repository.ChatwootContactMapRepository, instanceRepo instance_repository.InstanceRepository, serverURL string) ChatwootService {
 	return &chatwootService{
 		repo:           repo,
 		contactMapRepo: contactMapRepo,
 		instanceRepo:   instanceRepo,
 		client:         chatwoot_client.NewClient(),
+		serverURL:      serverURL,
 	}
 }
 
@@ -189,6 +196,7 @@ func (s *chatwootService) SetConfig(instanceId string, input SetConfigStruct) (*
 		ImportMessages:          input.ImportMessages,
 		DaysLimitImportMessages: input.DaysLimitImportMessages,
 		AutoCreate:              input.AutoCreate,
+		IgnoreGroups:            input.IgnoreGroups,
 	}
 
 	if err := s.repo.Upsert(cfg); err != nil {
@@ -219,7 +227,13 @@ func (s *chatwootService) SetConfig(instanceId string, input SetConfigStruct) (*
 			if inboxName == "" {
 				inboxName = instanceId
 			}
-			inboxId, err := s.client.CreateInbox(cfg.Url, cfg.AccountId, cfg.Token, inboxName)
+			// Auto-configura o webhook da inbox (resposta do agente -> WhatsApp) se
+			// SERVER_URL estiver definido. Aponta pra rota pública deste serviço.
+			webhookURL := ""
+			if s.serverURL != "" {
+				webhookURL = fmt.Sprintf("%s/instance/chatwoot/webhook/%s", strings.TrimRight(s.serverURL, "/"), instanceId)
+			}
+			inboxId, err := s.client.CreateInbox(cfg.Url, cfg.AccountId, cfg.Token, inboxName, webhookURL)
 			if err != nil {
 				logger.LogWarn("[%s] falha ao criar inbox no Chatwoot automaticamente: %v", instanceId, err)
 				inboxWarning = fmt.Sprintf("config salva, mas não foi possível criar a inbox automaticamente no Chatwoot: %v", err)
@@ -366,7 +380,7 @@ func isChatwootContactJID(jid string) bool {
 // (por JID), reusando o cache em ChatwootContactMap. Travado por
 // (instanceId, jid) pra evitar criar duplicado quando duas mensagens do
 // mesmo contato chegam quase juntas.
-func (s *chatwootService) ensureRealContactConversation(cfg *chatwoot_model.ChatwootConfig, jid, senderName string) (string, error) {
+func (s *chatwootService) ensureRealContactConversation(cfg *chatwoot_model.ChatwootConfig, jid, senderName, groupName string) (string, error) {
 	unlock := s.lockContact(cfg.InstanceId, jid)
 	defer unlock()
 
@@ -380,7 +394,11 @@ func (s *chatwootService) ensureRealContactConversation(cfg *chatwoot_model.Chat
 		// grupo. Um "+telefone" sintético (ex.: +120363...) seria E.164 inválido e
 		// o Chatwoot recusaria (404). O autor de cada mensagem entra no conteúdo.
 		phone = ""
-		name = groupContactName(jid)
+		if groupName != "" {
+			name = groupName + " (GRUPO)"
+		} else {
+			name = groupContactName(jid)
+		}
 	} else {
 		phone = jidToPhone(jid)
 		name = senderName
@@ -412,7 +430,7 @@ func (s *chatwootService) ensureRealContactConversation(cfg *chatwoot_model.Chat
 	return conversationId, nil
 }
 
-func (s *chatwootService) NotifyIncomingMessage(instanceId, jid, senderName, text string) error {
+func (s *chatwootService) NotifyIncomingMessage(instanceId, jid, senderName, text, groupName string) error {
 	cfg, err := s.repo.GetByInstanceId(instanceId)
 	if err != nil || !cfg.Enabled || cfg.InboxId == "" {
 		return nil
@@ -424,8 +442,11 @@ func (s *chatwootService) NotifyIncomingMessage(instanceId, jid, senderName, tex
 	if !isChatwootContactJID(jid) {
 		return nil
 	}
+	if isGroupJID(jid) && cfg.IgnoreGroups {
+		return nil
+	}
 
-	conversationId, err := s.ensureRealContactConversation(cfg, jid, senderName)
+	conversationId, err := s.ensureRealContactConversation(cfg, jid, senderName, groupName)
 	if err != nil {
 		logger.LogWarn("[%s] chatwoot: %v", instanceId, err)
 		return err
@@ -445,7 +466,7 @@ func (s *chatwootService) NotifyIncomingMessage(instanceId, jid, senderName, tex
 	return nil
 }
 
-func (s *chatwootService) NotifyIncomingMedia(instanceId, jid, senderName string, data []byte, mimeType, filename, caption string) error {
+func (s *chatwootService) NotifyIncomingMedia(instanceId, jid, senderName string, data []byte, mimeType, filename, caption, groupName string) error {
 	cfg, err := s.repo.GetByInstanceId(instanceId)
 	if err != nil || !cfg.Enabled || cfg.InboxId == "" {
 		return nil
@@ -457,8 +478,11 @@ func (s *chatwootService) NotifyIncomingMedia(instanceId, jid, senderName string
 	if !isChatwootContactJID(jid) {
 		return nil
 	}
+	if isGroupJID(jid) && cfg.IgnoreGroups {
+		return nil
+	}
 
-	conversationId, err := s.ensureRealContactConversation(cfg, jid, senderName)
+	conversationId, err := s.ensureRealContactConversation(cfg, jid, senderName, groupName)
 	if err != nil {
 		logger.LogWarn("[%s] chatwoot: %v", instanceId, err)
 		return err
