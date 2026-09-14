@@ -1,5 +1,10 @@
 # Evolution GO - Changelog
 
+## v0.16.20
+
+### Fixes
+- **Chatwoot: canais/grupos não viram mais "contato" (para o loop de 404).** Mensagens de `@newsletter` (canais), `@g.us` (grupos) e `@broadcast`/status eram empurradas como contato 1:1 no Chatwoot — o JID virava um telefone sintético inválido (ex.: `+120363336020038705`), que o Chatwoot recusa, gerando `falha ao criar contato … 404 Resource could not be found` repetidamente e poluindo a conta. Novo guard `isChatwootContactJID` em `NotifyIncomingMessage`/`NotifyIncomingMedia`: só cria contato/conversa para JID de usuário real (`@s.whatsapp.net`/`@lid`); canal/grupo/broadcast é ignorado silenciosamente (a mensagem segue nos webhooks normais). Não altera o fluxo de conexão/aviso — esse 404 (aviso de conexão, telefone real) é config de credencial/conta do Chatwoot, tratado à parte.
+
 ## v0.16.19
 
 ### Security
