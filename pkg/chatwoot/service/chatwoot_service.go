@@ -311,6 +311,20 @@ func jidToPhone(jid string) string {
 	return "+" + number
 }
 
+// isChatwootContactJID diz se o JID é de um contato 1:1 real que faz sentido virar
+// contato no Chatwoot. Canais (@newsletter), grupos (@g.us) e broadcast/status NÃO
+// são contatos 1:1 — o JID viraria um "telefone" sintético inválido (ex.:
+// +120363336020038705) que o Chatwoot recusa, gerando 404 em loop e poluindo a
+// conta. Esses são ignorados (a mensagem segue nos webhooks normais, só não vira
+// contato/conversa no Chatwoot).
+func isChatwootContactJID(jid string) bool {
+	j := strings.ToLower(jid)
+	if strings.Contains(j, "@newsletter") || strings.Contains(j, "@g.us") || strings.Contains(j, "@broadcast") {
+		return false
+	}
+	return true
+}
+
 // ensureRealContactConversation garante contato+conversa de um contato REAL
 // (por JID), reusando o cache em ChatwootContactMap. Travado por
 // (instanceId, jid) pra evitar criar duplicado quando duas mensagens do
@@ -361,6 +375,10 @@ func (s *chatwootService) NotifyIncomingMessage(instanceId, jid, senderName, tex
 		return nil
 	}
 
+	if !isChatwootContactJID(jid) {
+		return nil
+	}
+
 	conversationId, err := s.ensureRealContactConversation(cfg, jid, senderName)
 	if err != nil {
 		logger.LogWarn("[%s] chatwoot: %v", instanceId, err)
@@ -381,6 +399,10 @@ func (s *chatwootService) NotifyIncomingMedia(instanceId, jid, senderName string
 		return nil
 	}
 	if len(data) == 0 {
+		return nil
+	}
+
+	if !isChatwootContactJID(jid) {
 		return nil
 	}
 
