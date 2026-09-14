@@ -1,5 +1,10 @@
 # Evolution GO - Changelog
 
+## v0.16.22
+
+### Features
+- **Chatwoot: mensagens de grupo agora aparecem como conversa.** A 0.16.20 filtrava grupo junto com canal para parar o loop de 404; mas o problema real do grupo era virar um "telefone" sintético inválido (`+120363...`). Agora `@g.us` é permitido e tratado certo: o contato do grupo é criado **por identifier (JID) + nome "Grupo <id>", sem telefone** (Chatwoot aceita contato sem phone quando há identifier), e cada mensagem entra prefixada com o autor (`Fulano: texto`) para identificar quem falou dentro da conversa do grupo. Canais (`@newsletter`) e `@broadcast`/status seguem fora (são one-way, não atendimento). `FindOrCreateContact` não faz mais busca por telefone quando o telefone está vazio (evitava match errado). Novos helpers `isGroupJID`/`groupContactName`.
+
 ## v0.16.21
 
 ### Fixes

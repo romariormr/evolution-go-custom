@@ -330,15 +330,33 @@ func jidToPhone(jid string) string {
 	return "+" + number
 }
 
-// isChatwootContactJID diz se o JID é de um contato 1:1 real que faz sentido virar
-// contato no Chatwoot. Canais (@newsletter), grupos (@g.us) e broadcast/status NÃO
-// são contatos 1:1 — o JID viraria um "telefone" sintético inválido (ex.:
-// +120363336020038705) que o Chatwoot recusa, gerando 404 em loop e poluindo a
-// conta. Esses são ignorados (a mensagem segue nos webhooks normais, só não vira
-// contato/conversa no Chatwoot).
+// isGroupJID diz se o JID é de um grupo do WhatsApp (@g.us).
+func isGroupJID(jid string) bool {
+	return strings.Contains(strings.ToLower(jid), "@g.us")
+}
+
+// groupContactName gera um nome estável pro contato que representa um grupo no
+// Chatwoot (grupo não tem telefone). Ex.: "Grupo 385046". Ideal seria o assunto
+// do grupo, mas ele não chega no fluxo de notificação — o sufixo do id mantém o
+// contato estável e reconhecível.
+func groupContactName(jid string) string {
+	n := jid
+	if at := strings.Index(n, "@"); at != -1 {
+		n = n[:at]
+	}
+	if len(n) > 6 {
+		n = n[len(n)-6:]
+	}
+	return "Grupo " + n
+}
+
+// isChatwootContactJID diz se o JID deve virar conversa no Chatwoot. Canais
+// (@newsletter, broadcast one-way) e status NÃO são atendimento e ficam de fora.
+// Grupos (@g.us) SÃO permitidos: viram uma conversa (contato por identifier +
+// nome do grupo, sem telefone sintético — ver ensureRealContactConversation).
 func isChatwootContactJID(jid string) bool {
 	j := strings.ToLower(jid)
-	if strings.Contains(j, "@newsletter") || strings.Contains(j, "@g.us") || strings.Contains(j, "@broadcast") {
+	if strings.Contains(j, "@newsletter") || strings.Contains(j, "@broadcast") {
 		return false
 	}
 	return true
@@ -356,10 +374,19 @@ func (s *chatwootService) ensureRealContactConversation(cfg *chatwoot_model.Chat
 		return existing.ChatwootConversationId, nil
 	}
 
-	name := senderName
-	phone := jidToPhone(jid)
-	if name == "" {
-		name = phone
+	var name, phone string
+	if isGroupJID(jid) {
+		// Grupo não tem telefone: cria o contato só por identifier (JID) + nome do
+		// grupo. Um "+telefone" sintético (ex.: +120363...) seria E.164 inválido e
+		// o Chatwoot recusaria (404). O autor de cada mensagem entra no conteúdo.
+		phone = ""
+		name = groupContactName(jid)
+	} else {
+		phone = jidToPhone(jid)
+		name = senderName
+		if name == "" {
+			name = phone
+		}
 	}
 
 	contactId, sourceId, err := s.client.FindOrCreateContact(cfg.Url, cfg.AccountId, cfg.Token, cfg.InboxId, name, phone, jid)
@@ -404,7 +431,13 @@ func (s *chatwootService) NotifyIncomingMessage(instanceId, jid, senderName, tex
 		return err
 	}
 
-	if err := s.client.SendTextMessage(cfg.Url, cfg.AccountId, cfg.Token, conversationId, text, "incoming"); err != nil {
+	content := text
+	if isGroupJID(jid) && senderName != "" {
+		// Numa conversa de grupo o contato é o grupo; identifica o autor no texto.
+		content = senderName + ": " + text
+	}
+
+	if err := s.client.SendTextMessage(cfg.Url, cfg.AccountId, cfg.Token, conversationId, content, "incoming"); err != nil {
 		logger.LogWarn("[%s] chatwoot: falha ao enviar mensagem de %s: %v", instanceId, jid, err)
 		return err
 	}
@@ -431,9 +464,14 @@ func (s *chatwootService) NotifyIncomingMedia(instanceId, jid, senderName string
 		return err
 	}
 
+	mediaCaption := caption
+	if isGroupJID(jid) && senderName != "" {
+		mediaCaption = strings.TrimSpace(senderName + ": " + caption)
+	}
+
 	// mimeType real (ex.: "audio/ogg") precisa ir no upload — sem ele o Chatwoot
 	// classifica o anexo como "file" genérico em vez de audio/image/video.
-	if err := s.client.SendMediaMessage(cfg.Url, cfg.AccountId, cfg.Token, conversationId, data, filename, mimeType, caption, "incoming"); err != nil {
+	if err := s.client.SendMediaMessage(cfg.Url, cfg.AccountId, cfg.Token, conversationId, data, filename, mimeType, mediaCaption, "incoming"); err != nil {
 		logger.LogWarn("[%s] chatwoot: falha ao enviar mídia (%s) de %s: %v", instanceId, mimeType, jid, err)
 		return err
 	}

@@ -167,6 +167,11 @@ func (c *Client) FindOrCreateContact(baseURL, accountId, token, inboxId, name, p
 
 	respBody, err := c.doJSON(http.MethodPost, url, token, body)
 	if err != nil {
+		// Sem telefone (ex.: grupo) a busca por telefone não ajuda — desiste com
+		// o erro real em vez de fazer uma busca vazia que casaria qualquer coisa.
+		if phoneNumber == "" {
+			return "", "", err
+		}
 		// Contato com esse identifier/telefone já pode existir nessa conta —
 		// tenta localizar via busca antes de desistir.
 		return c.searchContact(baseURL, accountId, token, phoneNumber, inboxId)
