@@ -72,6 +72,16 @@ type ChatwootService interface {
 	// imagem) em vez de link de download genérico.
 	NotifyIncomingMedia(instanceId, jid, senderName string, data []byte, mimeType, filename, caption, groupName string) error
 
+	// NotifyOutgoingMessage espelha no Chatwoot uma mensagem que SAIU do próprio
+	// WhatsApp (fromMe) — ex.: o operador respondeu pelo celular. Entra como
+	// "outgoing" na conversa do contato, marcada com source_id "WAID:<id>" pro
+	// webhook do Chatwoot não reenviar de volta. Envios feitos pelo próprio agente
+	// no Chatwoot são ignorados (já estão lá) pelo waMsgID.
+	NotifyOutgoingMessage(instanceId, jid, contactName, text, groupName, waMsgID string) error
+
+	// NotifyOutgoingMedia é a versão de mídia do NotifyOutgoingMessage.
+	NotifyOutgoingMedia(instanceId, jid, contactName string, data []byte, mimeType, filename, caption, groupName, waMsgID string) error
+
 	// HandleAgentReply processa o webhook do Chatwoot quando um agente responde
 	// numa conversa — resolve o JID a partir da conversa e reenvia pro WhatsApp
 	// via MessageSender. No-op silencioso se a conversa não corresponde a um
@@ -89,11 +99,13 @@ type ChatwootService interface {
 // pra devolver a resposta do agente pro WhatsApp — interface local (em vez de
 // importar pkg/sendMessage/service direto) pra evitar ciclo de import:
 // sendMessage -> whatsmeow -> chatwoot -> sendMessage.
+// Retornam o ID da mensagem no WhatsApp — usado pra marcar o que foi enviado
+// pelo próprio agente e ignorar o eco quando ele volta como fromMe (anti-loop).
 type MessageSender interface {
-	SendText(number, text string, instance *instance_model.Instance) error
+	SendText(number, text string, instance *instance_model.Instance) (string, error)
 	// SendMedia manda um arquivo — mediaType é "image"/"video"/"audio"/"document"
 	// (mesma nomenclatura do endpoint /send/media já existente).
-	SendMedia(number string, data []byte, mediaType, filename, caption string, instance *instance_model.Instance) error
+	SendMedia(number string, data []byte, mediaType, filename, caption string, instance *instance_model.Instance) (string, error)
 }
 
 // AgentReplyStruct é o que o handler do webhook do Chatwoot extrai do payload
@@ -121,6 +133,41 @@ const statusContactName = "Gerador de QR"
 // com um DDI+DDD plausível em vez de um valor fixo.
 func statusContactPhone(inboxId string) string {
 	return fmt.Sprintf("+1555%s", inboxId)
+}
+
+// agentSentIDs guarda os IDs das mensagens que o PRÓPRIO agente enviou pelo
+// Chatwoot (HandleAgentReply). Quando o WhatsApp devolve esse envio como evento
+// fromMe, o ID bate aqui e a mensagem NÃO é reposta no Chatwoot — senão a
+// resposta que o agente acabou de digitar apareceria duplicada.
+var agentSentIDs sync.Map // waMessageID -> time.Time
+
+const agentSentTTL = 10 * time.Minute
+
+// markAgentSent registra um envio do agente. Aproveita pra expirar entradas
+// antigas (roda pouco: só quando o agente responde).
+func markAgentSent(waMsgID string) {
+	now := time.Now()
+	agentSentIDs.Range(func(k, v any) bool {
+		if t, ok := v.(time.Time); ok && now.Sub(t) > agentSentTTL {
+			agentSentIDs.Delete(k)
+		}
+		return true
+	})
+	if waMsgID != "" {
+		agentSentIDs.Store(waMsgID, now)
+	}
+}
+
+// consumeAgentSent devolve true (e limpa) se esse ID foi enviado pelo agente.
+func consumeAgentSent(waMsgID string) bool {
+	if waMsgID == "" {
+		return false
+	}
+	if _, ok := agentSentIDs.Load(waMsgID); ok {
+		agentSentIDs.Delete(waMsgID)
+		return true
+	}
+	return false
 }
 
 type chatwootService struct {
@@ -295,12 +342,12 @@ func (s *chatwootService) NotifyQrCode(instanceId string, qrPNG []byte, code str
 		return err
 	}
 
-	if err := s.client.SendMediaMessage(cfg.Url, cfg.AccountId, cfg.Token, conversationId, qrPNG, "qrcode.png", "image/png", "qrgeneratedsuccesfully", "outgoing"); err != nil {
+	if err := s.client.SendMediaMessage(cfg.Url, cfg.AccountId, cfg.Token, conversationId, qrPNG, "qrcode.png", "image/png", "qrgeneratedsuccesfully", "outgoing", ""); err != nil {
 		logger.LogWarn("[%s] chatwoot: falha ao enviar QR code: %v", instanceId, err)
 		return err
 	}
 
-	if err := s.client.SendTextMessage(cfg.Url, cfg.AccountId, cfg.Token, conversationId, "scanqr", "outgoing"); err != nil {
+	if err := s.client.SendTextMessage(cfg.Url, cfg.AccountId, cfg.Token, conversationId, "scanqr", "outgoing", ""); err != nil {
 		logger.LogWarn("[%s] chatwoot: falha ao enviar aviso 'scanqr': %v", instanceId, err)
 	}
 
@@ -320,7 +367,7 @@ func (s *chatwootService) NotifyConnected(instanceId string) error {
 		return err
 	}
 
-	if err := s.client.SendTextMessage(cfg.Url, cfg.AccountId, cfg.Token, conversationId, "cw.inbox.connected", "outgoing"); err != nil {
+	if err := s.client.SendTextMessage(cfg.Url, cfg.AccountId, cfg.Token, conversationId, "cw.inbox.connected", "outgoing", ""); err != nil {
 		logger.LogWarn("[%s] chatwoot: falha ao enviar aviso de conexão: %v", instanceId, err)
 		return err
 	}
@@ -458,7 +505,7 @@ func (s *chatwootService) NotifyIncomingMessage(instanceId, jid, senderName, tex
 		content = senderName + ": " + text
 	}
 
-	if err := s.client.SendTextMessage(cfg.Url, cfg.AccountId, cfg.Token, conversationId, content, "incoming"); err != nil {
+	if err := s.client.SendTextMessage(cfg.Url, cfg.AccountId, cfg.Token, conversationId, content, "incoming", ""); err != nil {
 		logger.LogWarn("[%s] chatwoot: falha ao enviar mensagem de %s: %v", instanceId, jid, err)
 		return err
 	}
@@ -495,7 +542,7 @@ func (s *chatwootService) NotifyIncomingMedia(instanceId, jid, senderName string
 
 	// mimeType real (ex.: "audio/ogg") precisa ir no upload — sem ele o Chatwoot
 	// classifica o anexo como "file" genérico em vez de audio/image/video.
-	if err := s.client.SendMediaMessage(cfg.Url, cfg.AccountId, cfg.Token, conversationId, data, filename, mimeType, mediaCaption, "incoming"); err != nil {
+	if err := s.client.SendMediaMessage(cfg.Url, cfg.AccountId, cfg.Token, conversationId, data, filename, mimeType, mediaCaption, "incoming", ""); err != nil {
 		logger.LogWarn("[%s] chatwoot: falha ao enviar mídia (%s) de %s: %v", instanceId, mimeType, jid, err)
 		return err
 	}
@@ -509,6 +556,72 @@ func jidFromMapping(jid string) string {
 		return jid[:at]
 	}
 	return jid
+}
+
+// outgoingAllowed centraliza as checagens comuns do espelhamento de mensagens
+// enviadas (fromMe). Devolve a config quando deve espelhar, ou nil pra ignorar.
+func (s *chatwootService) outgoingAllowed(instanceId, jid, waMsgID string) *chatwoot_model.ChatwootConfig {
+	cfg, err := s.repo.GetByInstanceId(instanceId)
+	if err != nil || !cfg.Enabled || cfg.InboxId == "" {
+		return nil
+	}
+	if !isChatwootContactJID(jid) {
+		return nil
+	}
+	if isGroupJID(jid) && cfg.IgnoreGroups {
+		return nil
+	}
+	// Foi o próprio agente que enviou pelo Chatwoot: já está lá, não duplica.
+	if consumeAgentSent(waMsgID) {
+		return nil
+	}
+	return cfg
+}
+
+func (s *chatwootService) NotifyOutgoingMessage(instanceId, jid, contactName, text, groupName, waMsgID string) error {
+	if text == "" {
+		return nil
+	}
+	cfg := s.outgoingAllowed(instanceId, jid, waMsgID)
+	if cfg == nil {
+		return nil
+	}
+
+	conversationId, err := s.ensureRealContactConversation(cfg, jid, contactName, groupName)
+	if err != nil {
+		logger.LogWarn("[%s] chatwoot: %v", instanceId, err)
+		return err
+	}
+
+	if err := s.client.SendTextMessage(cfg.Url, cfg.AccountId, cfg.Token, conversationId, text, "outgoing", "WAID:"+waMsgID); err != nil {
+		logger.LogWarn("[%s] chatwoot: falha ao espelhar mensagem enviada para %s: %v", instanceId, jid, err)
+		return err
+	}
+
+	return nil
+}
+
+func (s *chatwootService) NotifyOutgoingMedia(instanceId, jid, contactName string, data []byte, mimeType, filename, caption, groupName, waMsgID string) error {
+	if len(data) == 0 {
+		return nil
+	}
+	cfg := s.outgoingAllowed(instanceId, jid, waMsgID)
+	if cfg == nil {
+		return nil
+	}
+
+	conversationId, err := s.ensureRealContactConversation(cfg, jid, contactName, groupName)
+	if err != nil {
+		logger.LogWarn("[%s] chatwoot: %v", instanceId, err)
+		return err
+	}
+
+	if err := s.client.SendMediaMessage(cfg.Url, cfg.AccountId, cfg.Token, conversationId, data, filename, mimeType, caption, "outgoing", "WAID:"+waMsgID); err != nil {
+		logger.LogWarn("[%s] chatwoot: falha ao espelhar mídia enviada para %s: %v", instanceId, jid, err)
+		return err
+	}
+
+	return nil
 }
 
 func (s *chatwootService) HandleAgentReply(instanceId, chatwootConversationId string, reply AgentReplyStruct) error {
@@ -551,19 +664,24 @@ func (s *chatwootService) HandleAgentReply(instanceId, chatwootConversationId st
 			return err
 		}
 
-		if err := s.sender.SendMedia(number, data, mediaType, filename, content, instance); err != nil {
+		waMsgID, err := s.sender.SendMedia(number, data, mediaType, filename, content, instance)
+		if err != nil {
 			logger.LogWarn("[%s] chatwoot: falha ao reenviar mídia do agente pro WhatsApp (jid=%s): %v", instanceId, mapping.Jid, err)
 			return err
 		}
+		// Marca pra ignorar o eco fromMe desse envio (já está no Chatwoot).
+		markAgentSent(waMsgID)
 
 		logger.LogInfo("[%s] chatwoot: mídia do agente reenviada pro WhatsApp (jid=%s)", instanceId, mapping.Jid)
 		return nil
 	}
 
-	if err := s.sender.SendText(number, content, instance); err != nil {
+	waMsgID, err := s.sender.SendText(number, content, instance)
+	if err != nil {
 		logger.LogWarn("[%s] chatwoot: falha ao reenviar resposta do agente pro WhatsApp (jid=%s): %v", instanceId, mapping.Jid, err)
 		return err
 	}
+	markAgentSent(waMsgID)
 
 	logger.LogInfo("[%s] chatwoot: resposta do agente reenviada pro WhatsApp (jid=%s)", instanceId, mapping.Jid)
 	return nil

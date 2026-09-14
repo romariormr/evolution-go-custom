@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	chatwoot_service "github.com/EvolutionAPI/evolution-go/pkg/chatwoot/service"
 	instance_model "github.com/EvolutionAPI/evolution-go/pkg/instance/model"
@@ -176,10 +177,14 @@ func (h *chatwootHandler) ResetStatusConversation(ctx *gin.Context) {
 }
 
 type chatwootWebhookPayload struct {
-	Event        string `json:"event"`
-	MessageType  string `json:"message_type"`
-	Private      bool   `json:"private"`
-	Content      string `json:"content"`
+	Event       string `json:"event"`
+	MessageType string `json:"message_type"`
+	Private     bool   `json:"private"`
+	Content     string `json:"content"`
+	// SourceId identifica a origem da mensagem. As que o Evolution GO espelha do
+	// WhatsApp vêm com "WAID:<id>" — precisam ser ignoradas aqui, senão o webhook
+	// reenviaria pro contato a mensagem que acabou de chegar do WhatsApp (loop).
+	SourceId     string `json:"source_id"`
 	Conversation struct {
 		Id int `json:"id"`
 	} `json:"conversation"`
@@ -224,6 +229,12 @@ func (h *chatwootHandler) Webhook(ctx *gin.Context) {
 
 	if payload.Event != "message_created" || payload.MessageType != "outgoing" || payload.Private || payload.Sender.Type != "user" {
 		ctx.JSON(http.StatusOK, gin.H{"message": "ignored"})
+		return
+	}
+
+	// Espelho de mensagem que veio do próprio WhatsApp — não reenviar (loop).
+	if strings.HasPrefix(payload.SourceId, "WAID:") {
+		ctx.JSON(http.StatusOK, gin.H{"message": "ignored (echo do whatsapp)"})
 		return
 	}
 

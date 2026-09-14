@@ -1625,7 +1625,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 					}
 				}
 
-				if err == nil && len(data) > 0 && mycli.chatwootService != nil && !evt.Info.IsFromMe {
+				if err == nil && len(data) > 0 && mycli.chatwootService != nil {
 					chatwootMediaType := ""
 					caption := ""
 					filename := evt.Info.ID + extension
@@ -1655,15 +1655,21 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 						mediaMime := mimeType
 						isGrp := evt.Info.IsGroup
 						chat := evt.Info.Chat
+						fromMe := evt.Info.IsFromMe
+						waMsgID := evt.Info.ID
 						go func() {
 							groupName := ""
-							senderName := pushName
+							contactName := pushName
 							if isGrp {
 								groupName = resolveGroupName(mycli.WAClient, mycli.Instance.Id, chat)
 							} else {
-								senderName = resolveContactName(mycli.WAClient, chat, pushName)
+								contactName = resolveContactName(mycli.WAClient, chat, pushName)
 							}
-							_ = mycli.chatwootService.NotifyIncomingMedia(mycli.Instance.Id, jid, senderName, mediaBytes, mediaMime, filename, caption, groupName)
+							if fromMe {
+								_ = mycli.chatwootService.NotifyOutgoingMedia(mycli.Instance.Id, jid, contactName, mediaBytes, mediaMime, filename, caption, groupName, waMsgID)
+							} else {
+								_ = mycli.chatwootService.NotifyIncomingMedia(mycli.Instance.Id, jid, contactName, mediaBytes, mediaMime, filename, caption, groupName)
+							}
 						}()
 					}
 				}
@@ -1835,7 +1841,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 			}
 		}
 
-		if mycli.chatwootService != nil && !evt.Info.IsFromMe {
+		if mycli.chatwootService != nil {
 			text := evt.Message.GetConversation()
 			if text == "" {
 				text = evt.Message.GetExtendedTextMessage().GetText()
@@ -1845,18 +1851,28 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 				pushName := evt.Info.PushName
 				isGrp := evt.Info.IsGroup
 				chat := evt.Info.Chat
+				fromMe := evt.Info.IsFromMe
+				waMsgID := evt.Info.ID
 				go func() {
 					groupName := ""
-					senderName := pushName
+					contactName := pushName
 					if isGrp {
 						groupName = resolveGroupName(mycli.WAClient, mycli.Instance.Id, chat)
 					} else {
-						// 1:1: usa o nome salvo na agenda (FullName) em vez do PushName.
-						senderName = resolveContactName(mycli.WAClient, chat, pushName)
+						// 1:1: nome salvo na agenda (FullName) em vez do PushName. Em
+						// fromMe o Chat é o destinatário, então resolve o nome dele.
+						contactName = resolveContactName(mycli.WAClient, chat, pushName)
 					}
 					// O filtro de grupo por instância fica na config do Chatwoot
-					// (IgnoreGroups), checado dentro do NotifyIncomingMessage.
-					_ = mycli.chatwootService.NotifyIncomingMessage(mycli.Instance.Id, jid, senderName, text, groupName)
+					// (IgnoreGroups), checado dentro dos Notify*.
+					if fromMe {
+						// Mensagem que saiu deste WhatsApp (ex.: respondida pelo celular)
+						// espelhada como "outgoing". Ecos de respostas do próprio agente
+						// são descartados pelo waMsgID dentro do serviço.
+						_ = mycli.chatwootService.NotifyOutgoingMessage(mycli.Instance.Id, jid, contactName, text, groupName, waMsgID)
+					} else {
+						_ = mycli.chatwootService.NotifyIncomingMessage(mycli.Instance.Id, jid, contactName, text, groupName)
+					}
 				}()
 			}
 		}
