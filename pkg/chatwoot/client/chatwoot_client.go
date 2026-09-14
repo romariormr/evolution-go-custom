@@ -8,6 +8,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
+	neturl "net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -166,22 +167,35 @@ func (c *Client) FindOrCreateContact(baseURL, accountId, token, inboxId, name, p
 
 	inboxIdInt, _ := strconv.Atoi(inboxId)
 	body := map[string]any{
-		"inbox_id":     inboxIdInt,
-		"name":         name,
-		"phone_number": phoneNumber,
-		"identifier":   identifier,
+		"inbox_id":   inboxIdInt,
+		"name":       name,
+		"identifier": identifier,
+	}
+	// Grupo não tem telefone: mandar "phone_number": "" faz o Chatwoot recusar o
+	// contato. Só envia o campo quando há telefone de verdade (1:1).
+	if phoneNumber != "" {
+		body["phone_number"] = phoneNumber
 	}
 
 	respBody, err := c.doJSON(http.MethodPost, url, token, body)
 	if err != nil {
-		// Sem telefone (ex.: grupo) a busca por telefone não ajuda — desiste com
-		// o erro real em vez de fazer uma busca vazia que casaria qualquer coisa.
-		if phoneNumber == "" {
-			return "", "", err
+		// Create falhou quase sempre porque o contato JÁ EXISTE nessa conta —
+		// tipicamente vinculado a uma inbox antiga (inbox recriada). Localiza o
+		// contato e garante o vínculo (contact_inbox) com a inbox ATUAL; sem isso
+		// o contato existe mas não tem source_id nessa inbox e a conversa nunca
+		// é criada ("não encontrado após falha ao criar").
+		cid, sid, ferr := c.searchContact(baseURL, accountId, token, phoneNumber, identifier, inboxId)
+		if ferr != nil {
+			return "", "", ferr
 		}
-		// Contato com esse identifier/telefone já pode existir nessa conta —
-		// tenta localizar via busca antes de desistir.
-		return c.searchContact(baseURL, accountId, token, phoneNumber, inboxId)
+		if sid != "" {
+			return cid, sid, nil
+		}
+		sid, aerr := c.EnsureContactInbox(baseURL, accountId, token, cid, inboxId)
+		if aerr != nil {
+			return "", "", aerr
+		}
+		return cid, sid, nil
 	}
 
 	var parsed struct {
@@ -201,8 +215,20 @@ func (c *Client) FindOrCreateContact(baseURL, accountId, token, inboxId, name, p
 	return fmt.Sprintf("%d", parsed.Payload.Contact.Id), parsed.Payload.ContactInbox.SourceId, nil
 }
 
-func (c *Client) searchContact(baseURL, accountId, token, phoneNumber, inboxId string) (contactId string, sourceId string, err error) {
-	url := fmt.Sprintf("%s/api/v1/accounts/%s/contacts/search?q=%s", strings.TrimRight(baseURL, "/"), accountId, phoneNumber)
+// searchContact acha um contato já existente na conta pelo telefone (1:1) ou pelo
+// identifier (grupo, que não tem telefone). Devolve o contactId mesmo quando o
+// contato NÃO está vinculado à inbox atual — nesse caso sourceId vem vazio e o
+// chamador cria o vínculo com EnsureContactInbox. Exigir o vínculo aqui era o que
+// quebrava tudo depois de recriar a inbox.
+func (c *Client) searchContact(baseURL, accountId, token, phoneNumber, identifier, inboxId string) (contactId string, sourceId string, err error) {
+	query := phoneNumber
+	if query == "" {
+		query = identifier
+	}
+	if query == "" {
+		return "", "", fmt.Errorf("sem telefone nem identifier pra buscar contato no chatwoot")
+	}
+	url := fmt.Sprintf("%s/api/v1/accounts/%s/contacts/search?q=%s", strings.TrimRight(baseURL, "/"), accountId, neturl.QueryEscape(query))
 
 	req, reqErr := http.NewRequest(http.MethodGet, url, nil)
 	if reqErr != nil {
@@ -228,6 +254,7 @@ func (c *Client) searchContact(baseURL, accountId, token, phoneNumber, inboxId s
 		Payload []struct {
 			Id             int    `json:"id"`
 			PhoneNumber    string `json:"phone_number"`
+			Identifier     string `json:"identifier"`
 			ContactInboxes []struct {
 				SourceId string `json:"source_id"`
 				Inbox    struct {
@@ -246,17 +273,60 @@ func (c *Client) searchContact(baseURL, accountId, token, phoneNumber, inboxId s
 	// contato real completamente sem relação, e as mensagens de status foram parar
 	// na conversa dele).
 	for _, found := range parsed.Payload {
-		if found.PhoneNumber != phoneNumber {
+		// Casa de forma exata: telefone quando há telefone (1:1), senão identifier
+		// (grupo). A busca do Chatwoot é fuzzy — sem o match exato um contato
+		// qualquer poderia ser aceito (já aconteceu com as mensagens de status).
+		if phoneNumber != "" {
+			if found.PhoneNumber != phoneNumber {
+				continue
+			}
+		} else if found.Identifier != identifier {
 			continue
 		}
+
+		// Achou o contato. Se já tem vínculo com a inbox atual, devolve o source_id;
+		// senão devolve só o contactId e o chamador cria o vínculo.
 		for _, ci := range found.ContactInboxes {
 			if fmt.Sprintf("%d", ci.Inbox.Id) == inboxId {
 				return fmt.Sprintf("%d", found.Id), ci.SourceId, nil
 			}
 		}
+		return fmt.Sprintf("%d", found.Id), "", nil
 	}
 
-	return "", "", fmt.Errorf("contato %s (inbox %s) não encontrado no chatwoot após falha ao criar", phoneNumber, inboxId)
+	return "", "", fmt.Errorf("contato %q não encontrado no chatwoot após falha ao criar", query)
+}
+
+// EnsureContactInbox vincula um contato já existente à inbox informada e devolve
+// o source_id desse vínculo — necessário pra abrir conversa nessa inbox. É o que
+// permite reaproveitar contatos antigos quando a inbox é recriada.
+// Doc: POST /api/v1/accounts/{account_id}/contacts/{contact_id}/contact_inboxes
+func (c *Client) EnsureContactInbox(baseURL, accountId, token, contactId, inboxId string) (string, error) {
+	url := fmt.Sprintf("%s/api/v1/accounts/%s/contacts/%s/contact_inboxes", strings.TrimRight(baseURL, "/"), accountId, contactId)
+
+	inboxIdInt, _ := strconv.Atoi(inboxId)
+	respBody, err := c.doJSON(http.MethodPost, url, token, map[string]any{"inbox_id": inboxIdInt})
+	if err != nil {
+		return "", fmt.Errorf("falha ao vincular contato %s à inbox %s: %w", contactId, inboxId, err)
+	}
+
+	// A resposta traz o contact_inbox criado (source_id no topo ou sob payload).
+	var parsed struct {
+		SourceId string `json:"source_id"`
+		Payload  struct {
+			SourceId string `json:"source_id"`
+		} `json:"payload"`
+	}
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return "", fmt.Errorf("resposta inesperada do chatwoot ao vincular contato à inbox: %w", err)
+	}
+	if parsed.SourceId != "" {
+		return parsed.SourceId, nil
+	}
+	if parsed.Payload.SourceId != "" {
+		return parsed.Payload.SourceId, nil
+	}
+	return "", fmt.Errorf("chatwoot não devolveu source_id ao vincular contato %s à inbox %s", contactId, inboxId)
 }
 
 // CreateConversation abre uma conversa nova pro contato dentro da inbox.

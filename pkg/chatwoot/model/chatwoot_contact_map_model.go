@@ -18,6 +18,13 @@ type ChatwootContactMap struct {
 	ChatwootContactId      string `json:"chatwootContactId"`
 	ChatwootConversationId string `json:"chatwootConversationId"`
 
+	// InboxId é a inbox em que essa conversa foi criada. Se a inbox da config
+	// mudar (inbox recriada/trocada), a conversa cacheada aqui não serve mais —
+	// ela vive na inbox antiga e as mensagens iriam parar num lugar que ninguém
+	// olha (ou numa conversa deletada). Guardando o inbox, o cache só é reusado
+	// quando bate com a inbox atual; senão contato/conversa são recriados.
+	InboxId string `json:"inboxId" gorm:"default:''"`
+
 	CreatedAt time.Time `json:"createdAt" gorm:"autoCreateTime"`
 	UpdatedAt time.Time `json:"updatedAt" gorm:"autoUpdateTime"`
 }
