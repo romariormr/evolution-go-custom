@@ -3,6 +3,7 @@ package chatwoot_client
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -13,6 +14,11 @@ import (
 	"strings"
 	"time"
 )
+
+// ErrNotFound marca respostas 404 do Chatwoot ("Resource could not be found").
+// Serve pra distinguir "o recurso sumiu" (conversa apagada pelo agente, inbox
+// deletada) de um erro qualquer — nesses casos dá pra recriar em vez de desistir.
+var ErrNotFound = errors.New("chatwoot: recurso não encontrado")
 
 // Client fala com a API administrativa do Chatwoot (criação de inbox, etc).
 // Não confundir com o webhook do Chatwoot (esse é recebido, não chamado por aqui).
@@ -92,6 +98,22 @@ func (c *Client) InboxExists(baseURL, accountId, token, inboxId string) (bool, e
 	}
 }
 
+// UpdateInboxWebhook aponta o webhook de uma inbox JÁ EXISTENTE de volta pro
+// Evolution GO. O webhook_url só é aplicado na criação da inbox, então uma inbox
+// antiga (ou recriada à mão no Chatwoot) ficaria sem o caminho de volta e a
+// resposta do agente nunca sairia pro WhatsApp. Idempotente.
+// Doc: PATCH /api/v1/accounts/{account_id}/inboxes/{inbox_id}
+func (c *Client) UpdateInboxWebhook(baseURL, accountId, token, inboxId, webhookURL string) error {
+	if inboxId == "" || webhookURL == "" {
+		return nil
+	}
+	url := fmt.Sprintf("%s/api/v1/accounts/%s/inboxes/%s", strings.TrimRight(baseURL, "/"), accountId, inboxId)
+	_, err := c.doJSON(http.MethodPatch, url, token, map[string]any{
+		"channel": map[string]any{"webhook_url": webhookURL},
+	})
+	return err
+}
+
 // retryDelays define o backoff entre tentativas — falha de rede/instabilidade
 // pontual do Chatwoot não pode virar mensagem perdida silenciosamente.
 var retryDelays = []time.Duration{500 * time.Millisecond, 2 * time.Second}
@@ -146,6 +168,10 @@ func (c *Client) doJSON(method, url, token string, body map[string]any) ([]byte,
 
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			lastErr = fmt.Errorf("chatwoot retornou %d: %s", resp.StatusCode, string(respBody))
+			if resp.StatusCode == http.StatusNotFound {
+				// Recurso sumiu (ex.: conversa apagada) — sinaliza pro chamador poder recriar.
+				return nil, fmt.Errorf("%w: %s", ErrNotFound, string(respBody))
+			}
 			if !isRetryableStatus(resp.StatusCode) {
 				return nil, lastErr
 			}
@@ -460,6 +486,9 @@ func (c *Client) SendMediaMessage(baseURL, accountId, token, conversationId stri
 
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			lastErr = fmt.Errorf("chatwoot retornou %d ao enviar mídia: %s", resp.StatusCode, string(respBody))
+			if resp.StatusCode == http.StatusNotFound {
+				return fmt.Errorf("%w: %s", ErrNotFound, string(respBody))
+			}
 			if !isRetryableStatus(resp.StatusCode) {
 				return lastErr
 			}

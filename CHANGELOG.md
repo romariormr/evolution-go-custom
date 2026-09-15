@@ -1,5 +1,12 @@
 # Evolution GO - Changelog
 
+## v0.16.28
+
+### Fixes
+- **Webhook da inbox agora se configura sozinho, inclusive em inbox que já existe.** O `webhook_url` só era aplicado na criação da inbox, então uma inbox antiga (ou recriada à mão no Chatwoot) ficava sem o caminho de volta e **nada que o agente respondia saía pro WhatsApp**. Novo `UpdateInboxWebhook` (`PATCH /inboxes/{id}`): ao salvar a config, o webhook é apontado para este serviço — idempotente, vale para inbox nova e existente.
+- **Não exige mais configurar `SERVER_URL`.** Quando a env não está definida, a URL pública é derivada da própria requisição que salvou a config (`X-Forwarded-Proto`/`X-Forwarded-Host`, ou o Host), já que o manager é acessado pelo domínio público. `SERVER_URL` continua tendo prioridade quando definida.
+- **Conversa apagada no Chatwoot volta a ser criada.** O cache (`chatwoot_contact_maps`) continuava apontando para a conversa deletada, então as mensagens seguintes daquele contato sumiam para sempre. Agora um 404 do Chatwoot no envio é reconhecido (`ErrNotFound`), o cache daquele JID é invalidado (`DeleteByJid`), contato/conversa são recriados e a mensagem é reenviada — uma vez, de forma reativa (sem custo no caminho feliz).
+
 ## v0.16.27
 
 ### Fixes
