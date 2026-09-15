@@ -11,6 +11,9 @@ type ChatwootContactMapRepository interface {
 	GetByJid(instanceId, jid string) (*chatwoot_model.ChatwootContactMap, error)
 	GetByConversationId(instanceId, conversationId string) (*chatwoot_model.ChatwootContactMap, error)
 	Upsert(m *chatwoot_model.ChatwootContactMap) error
+	// DeleteByJid invalida o cache de contato/conversa desse JID — usado quando a
+	// conversa foi apagada no Chatwoot e precisa ser recriada na próxima mensagem.
+	DeleteByJid(instanceId, jid string) error
 }
 
 type chatwootContactMapRepository struct {
@@ -37,6 +40,11 @@ func (r *chatwootContactMapRepository) GetByConversationId(instanceId, conversat
 		return nil, err
 	}
 	return &m, nil
+}
+
+func (r *chatwootContactMapRepository) DeleteByJid(instanceId, jid string) error {
+	return r.db.Where("instance_id = ? AND jid = ?", instanceId, jid).
+		Delete(&chatwoot_model.ChatwootContactMap{}).Error
 }
 
 func (r *chatwootContactMapRepository) Upsert(m *chatwoot_model.ChatwootContactMap) error {

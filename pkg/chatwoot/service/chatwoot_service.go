@@ -1,6 +1,7 @@
 package chatwoot_service
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -42,7 +43,10 @@ type ChatwootService interface {
 	// SetConfig salva a config e, se AutoCreate=true e ainda não existe inbox, tenta
 	// criá-la no Chatwoot. Falha na criação da inbox NÃO impede o save da config —
 	// erro vem em warning separado pro chamador decidir o que mostrar.
-	SetConfig(instanceId string, input SetConfigStruct) (cfg *chatwoot_model.ChatwootConfig, inboxWarning string, err error)
+	// publicBaseURL é a URL pública por onde este serviço foi chamado (derivada da
+	// requisição). Serve de fallback pro webhook da inbox quando SERVER_URL não
+	// está definido — assim o caminho de volta se configura sozinho.
+	SetConfig(instanceId string, input SetConfigStruct, publicBaseURL string) (cfg *chatwoot_model.ChatwootConfig, inboxWarning string, err error)
 	DeleteConfig(instanceId string) error
 
 	// NotifyQrCode posta o QR code recém-gerado na conversa de status da instância no
@@ -216,7 +220,7 @@ func (s *chatwootService) GetConfig(instanceId string) (*chatwoot_model.Chatwoot
 	return s.repo.GetByInstanceId(instanceId)
 }
 
-func (s *chatwootService) SetConfig(instanceId string, input SetConfigStruct) (*chatwoot_model.ChatwootConfig, string, error) {
+func (s *chatwootService) SetConfig(instanceId string, input SetConfigStruct, publicBaseURL string) (*chatwoot_model.ChatwootConfig, string, error) {
 	if _, err := s.instanceRepo.GetInstanceByID(instanceId); err != nil {
 		return nil, "", fmt.Errorf("instância não encontrada: %w", err)
 	}
@@ -269,16 +273,23 @@ func (s *chatwootService) SetConfig(instanceId string, input SetConfigStruct) (*
 			}
 		}
 
+		// URL pública deste serviço pro webhook de volta (resposta do agente ->
+		// WhatsApp). Usa SERVER_URL quando definido; senão cai no host da própria
+		// requisição que salvou a config (o manager acessa pelo domínio público),
+		// pra não exigir configuração manual nenhuma.
+		base := s.serverURL
+		if base == "" {
+			base = publicBaseURL
+		}
+		webhookURL := ""
+		if base != "" {
+			webhookURL = fmt.Sprintf("%s/instance/chatwoot/webhook/%s", strings.TrimRight(base, "/"), instanceId)
+		}
+
 		if needCreate {
 			inboxName := cfg.NameInbox
 			if inboxName == "" {
 				inboxName = instanceId
-			}
-			// Auto-configura o webhook da inbox (resposta do agente -> WhatsApp) se
-			// SERVER_URL estiver definido. Aponta pra rota pública deste serviço.
-			webhookURL := ""
-			if s.serverURL != "" {
-				webhookURL = fmt.Sprintf("%s/instance/chatwoot/webhook/%s", strings.TrimRight(s.serverURL, "/"), instanceId)
 			}
 			inboxId, err := s.client.CreateInbox(cfg.Url, cfg.AccountId, cfg.Token, inboxName, webhookURL)
 			if err != nil {
@@ -289,6 +300,17 @@ func (s *chatwootService) SetConfig(instanceId string, input SetConfigStruct) (*
 				if err := s.repo.Upsert(cfg); err != nil {
 					logger.LogWarn("[%s] inbox criada (id=%s) mas falha ao salvar inboxId: %v", instanceId, inboxId, err)
 				}
+			}
+		}
+
+		// Garante o webhook também na inbox que JÁ existia — webhook_url só é
+		// aplicado na criação, então inbox antiga (ou recriada à mão no Chatwoot)
+		// ficava sem caminho de volta e a resposta do agente nunca saía.
+		if webhookURL != "" && cfg.InboxId != "" {
+			if err := s.client.UpdateInboxWebhook(cfg.Url, cfg.AccountId, cfg.Token, cfg.InboxId, webhookURL); err != nil {
+				logger.LogWarn("[%s] chatwoot: falha ao configurar webhook da inbox %s: %v", instanceId, cfg.InboxId, err)
+			} else {
+				logger.LogInfo("[%s] chatwoot: webhook da inbox %s apontando para %s", instanceId, cfg.InboxId, webhookURL)
 			}
 		}
 	}
@@ -483,6 +505,57 @@ func (s *chatwootService) ensureRealContactConversation(cfg *chatwoot_model.Chat
 	return conversationId, nil
 }
 
+// sendTextHealing entrega o texto na conversa do contato e, se a conversa não
+// existir mais (apagada pelo agente no Chatwoot), invalida o cache, recria
+// contato/conversa e tenta de novo — uma vez só. Sem isso, apagar uma conversa
+// no Chatwoot fazia todas as mensagens seguintes daquele contato sumirem.
+func (s *chatwootService) sendTextHealing(cfg *chatwoot_model.ChatwootConfig, jid, contactName, groupName, content, messageType, sourceId string) error {
+	conversationId, err := s.ensureRealContactConversation(cfg, jid, contactName, groupName)
+	if err != nil {
+		return err
+	}
+
+	err = s.client.SendTextMessage(cfg.Url, cfg.AccountId, cfg.Token, conversationId, content, messageType, sourceId)
+	if err == nil || !errors.Is(err, chatwoot_client.ErrNotFound) {
+		return err
+	}
+
+	logger.LogWarn("[%s] chatwoot: conversa %s não existe mais — recriando para %s", cfg.InstanceId, conversationId, jid)
+	if derr := s.contactMapRepo.DeleteByJid(cfg.InstanceId, jid); derr != nil {
+		logger.LogWarn("[%s] chatwoot: falha ao invalidar cache de %s: %v", cfg.InstanceId, jid, derr)
+	}
+
+	conversationId, err = s.ensureRealContactConversation(cfg, jid, contactName, groupName)
+	if err != nil {
+		return err
+	}
+	return s.client.SendTextMessage(cfg.Url, cfg.AccountId, cfg.Token, conversationId, content, messageType, sourceId)
+}
+
+// sendMediaHealing é a versão de mídia do sendTextHealing.
+func (s *chatwootService) sendMediaHealing(cfg *chatwoot_model.ChatwootConfig, jid, contactName, groupName string, data []byte, filename, mimeType, caption, messageType, sourceId string) error {
+	conversationId, err := s.ensureRealContactConversation(cfg, jid, contactName, groupName)
+	if err != nil {
+		return err
+	}
+
+	err = s.client.SendMediaMessage(cfg.Url, cfg.AccountId, cfg.Token, conversationId, data, filename, mimeType, caption, messageType, sourceId)
+	if err == nil || !errors.Is(err, chatwoot_client.ErrNotFound) {
+		return err
+	}
+
+	logger.LogWarn("[%s] chatwoot: conversa %s não existe mais — recriando para %s", cfg.InstanceId, conversationId, jid)
+	if derr := s.contactMapRepo.DeleteByJid(cfg.InstanceId, jid); derr != nil {
+		logger.LogWarn("[%s] chatwoot: falha ao invalidar cache de %s: %v", cfg.InstanceId, jid, derr)
+	}
+
+	conversationId, err = s.ensureRealContactConversation(cfg, jid, contactName, groupName)
+	if err != nil {
+		return err
+	}
+	return s.client.SendMediaMessage(cfg.Url, cfg.AccountId, cfg.Token, conversationId, data, filename, mimeType, caption, messageType, sourceId)
+}
+
 func (s *chatwootService) NotifyIncomingMessage(instanceId, jid, senderName, text, groupName string) error {
 	cfg, err := s.repo.GetByInstanceId(instanceId)
 	if err != nil || !cfg.Enabled || cfg.InboxId == "" {
@@ -499,19 +572,13 @@ func (s *chatwootService) NotifyIncomingMessage(instanceId, jid, senderName, tex
 		return nil
 	}
 
-	conversationId, err := s.ensureRealContactConversation(cfg, jid, senderName, groupName)
-	if err != nil {
-		logger.LogWarn("[%s] chatwoot: %v", instanceId, err)
-		return err
-	}
-
 	content := text
 	if isGroupJID(jid) && senderName != "" {
 		// Numa conversa de grupo o contato é o grupo; identifica o autor no texto.
 		content = senderName + ": " + text
 	}
 
-	if err := s.client.SendTextMessage(cfg.Url, cfg.AccountId, cfg.Token, conversationId, content, "incoming", ""); err != nil {
+	if err := s.sendTextHealing(cfg, jid, senderName, groupName, content, "incoming", ""); err != nil {
 		logger.LogWarn("[%s] chatwoot: falha ao enviar mensagem de %s: %v", instanceId, jid, err)
 		return err
 	}
@@ -535,12 +602,6 @@ func (s *chatwootService) NotifyIncomingMedia(instanceId, jid, senderName string
 		return nil
 	}
 
-	conversationId, err := s.ensureRealContactConversation(cfg, jid, senderName, groupName)
-	if err != nil {
-		logger.LogWarn("[%s] chatwoot: %v", instanceId, err)
-		return err
-	}
-
 	mediaCaption := caption
 	if isGroupJID(jid) && senderName != "" {
 		mediaCaption = strings.TrimSpace(senderName + ": " + caption)
@@ -548,7 +609,7 @@ func (s *chatwootService) NotifyIncomingMedia(instanceId, jid, senderName string
 
 	// mimeType real (ex.: "audio/ogg") precisa ir no upload — sem ele o Chatwoot
 	// classifica o anexo como "file" genérico em vez de audio/image/video.
-	if err := s.client.SendMediaMessage(cfg.Url, cfg.AccountId, cfg.Token, conversationId, data, filename, mimeType, mediaCaption, "incoming", ""); err != nil {
+	if err := s.sendMediaHealing(cfg, jid, senderName, groupName, data, filename, mimeType, mediaCaption, "incoming", ""); err != nil {
 		logger.LogWarn("[%s] chatwoot: falha ao enviar mídia (%s) de %s: %v", instanceId, mimeType, jid, err)
 		return err
 	}
@@ -593,13 +654,7 @@ func (s *chatwootService) NotifyOutgoingMessage(instanceId, jid, contactName, te
 		return nil
 	}
 
-	conversationId, err := s.ensureRealContactConversation(cfg, jid, contactName, groupName)
-	if err != nil {
-		logger.LogWarn("[%s] chatwoot: %v", instanceId, err)
-		return err
-	}
-
-	if err := s.client.SendTextMessage(cfg.Url, cfg.AccountId, cfg.Token, conversationId, text, "outgoing", "WAID:"+waMsgID); err != nil {
+	if err := s.sendTextHealing(cfg, jid, contactName, groupName, text, "outgoing", "WAID:"+waMsgID); err != nil {
 		logger.LogWarn("[%s] chatwoot: falha ao espelhar mensagem enviada para %s: %v", instanceId, jid, err)
 		return err
 	}
@@ -616,13 +671,7 @@ func (s *chatwootService) NotifyOutgoingMedia(instanceId, jid, contactName strin
 		return nil
 	}
 
-	conversationId, err := s.ensureRealContactConversation(cfg, jid, contactName, groupName)
-	if err != nil {
-		logger.LogWarn("[%s] chatwoot: %v", instanceId, err)
-		return err
-	}
-
-	if err := s.client.SendMediaMessage(cfg.Url, cfg.AccountId, cfg.Token, conversationId, data, filename, mimeType, caption, "outgoing", "WAID:"+waMsgID); err != nil {
+	if err := s.sendMediaHealing(cfg, jid, contactName, groupName, data, filename, mimeType, caption, "outgoing", "WAID:"+waMsgID); err != nil {
 		logger.LogWarn("[%s] chatwoot: falha ao espelhar mídia enviada para %s: %v", instanceId, jid, err)
 		return err
 	}

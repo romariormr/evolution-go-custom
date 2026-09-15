@@ -34,6 +34,29 @@ func ensureSameInstance(ctx *gin.Context, instanceId string) bool {
 	return true
 }
 
+// publicBaseURL monta a URL pública por onde esta requisição chegou (o manager
+// acessa pelo domínio público, atrás do Traefik). Usada pra configurar sozinho o
+// webhook da inbox do Chatwoot quando SERVER_URL não está definido — assim o
+// caminho de volta (resposta do agente -> WhatsApp) não exige configuração manual.
+func publicBaseURL(ctx *gin.Context) string {
+	scheme := ctx.GetHeader("X-Forwarded-Proto")
+	if scheme == "" {
+		if ctx.Request.TLS != nil {
+			scheme = "https"
+		} else {
+			scheme = "http"
+		}
+	}
+	host := ctx.GetHeader("X-Forwarded-Host")
+	if host == "" {
+		host = ctx.Request.Host
+	}
+	if host == "" {
+		return ""
+	}
+	return scheme + "://" + host
+}
+
 type ChatwootHandler interface {
 	GetConfig(ctx *gin.Context)
 	SetConfig(ctx *gin.Context)
@@ -109,7 +132,7 @@ func (h *chatwootHandler) SetConfig(ctx *gin.Context) {
 		return
 	}
 
-	cfg, inboxWarning, err := h.service.SetConfig(instanceId, input)
+	cfg, inboxWarning, err := h.service.SetConfig(instanceId, input, publicBaseURL(ctx))
 	if err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
