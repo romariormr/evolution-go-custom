@@ -210,6 +210,16 @@ type chatwootWebhookPayload struct {
 	SourceId     string `json:"source_id"`
 	Conversation struct {
 		Id int `json:"id"`
+		// Meta.Sender é o CONTATO da conversa (não o agente). Necessário quando a
+		// conversa foi aberta pelo agente no Chatwoot e o evo-go ainda não a
+		// conhece: é daqui que sai o telefone/JID de destino.
+		Meta struct {
+			Sender struct {
+				Id          int    `json:"id"`
+				Identifier  string `json:"identifier"`
+				PhoneNumber string `json:"phone_number"`
+			} `json:"sender"`
+		} `json:"meta"`
 	} `json:"conversation"`
 	Sender struct {
 		Type string `json:"type"`
@@ -270,10 +280,18 @@ func (h *chatwootHandler) Webhook(ctx *gin.Context) {
 	}
 
 	conversationId := fmt.Sprintf("%d", payload.Conversation.Id)
+	contact := payload.Conversation.Meta.Sender
+	contactId := ""
+	if contact.Id != 0 {
+		contactId = fmt.Sprintf("%d", contact.Id)
+	}
 	reply := chatwoot_service.AgentReplyStruct{
-		Content:     payload.Content,
-		SenderName:  payload.Sender.Name,
-		Attachments: attachments,
+		Content:           payload.Content,
+		SenderName:        payload.Sender.Name,
+		Attachments:       attachments,
+		ContactId:         contactId,
+		ContactIdentifier: contact.Identifier,
+		ContactPhone:      contact.PhoneNumber,
 	}
 	if err := h.service.HandleAgentReply(instanceId, conversationId, reply); err != nil {
 		ctx.JSON(http.StatusOK, gin.H{"message": "processed with error", "error": err.Error()})

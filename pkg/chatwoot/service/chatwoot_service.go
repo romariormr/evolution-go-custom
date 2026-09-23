@@ -104,12 +104,14 @@ type ChatwootService interface {
 // importar pkg/sendMessage/service direto) pra evitar ciclo de import:
 // sendMessage -> whatsmeow -> chatwoot -> sendMessage.
 // Retornam o ID da mensagem no WhatsApp — usado pra marcar o que foi enviado
-// pelo próprio agente e ignorar o eco quando ele volta como fromMe (anti-loop).
+// pelo próprio agente e ignorar o eco quando ele volta como fromMe (anti-loop) —
+// e o JID de destino já resolvido pelo WhatsApp (ex.: com/sem o 9º dígito), usado
+// pra mapear conversas abertas pelo agente no Chatwoot.
 type MessageSender interface {
-	SendText(number, text string, instance *instance_model.Instance) (string, error)
+	SendText(number, text string, instance *instance_model.Instance) (msgID string, chatJID string, err error)
 	// SendMedia manda um arquivo — mediaType é "image"/"video"/"audio"/"document"
 	// (mesma nomenclatura do endpoint /send/media já existente).
-	SendMedia(number string, data []byte, mediaType, filename, caption string, instance *instance_model.Instance) (string, error)
+	SendMedia(number string, data []byte, mediaType, filename, caption string, instance *instance_model.Instance) (msgID string, chatJID string, err error)
 }
 
 // AgentReplyStruct é o que o handler do webhook do Chatwoot extrai do payload
@@ -118,6 +120,13 @@ type AgentReplyStruct struct {
 	Content     string
 	SenderName  string
 	Attachments []AgentReplyAttachment
+
+	// Contato da conversa, como o Chatwoot manda no webhook
+	// (conversation.meta.sender). Usado quando a conversa foi aberta pelo agente
+	// no Chatwoot e ainda não existe no nosso cache (contact_maps).
+	ContactId         string
+	ContactIdentifier string
+	ContactPhone      string
 }
 
 type AgentReplyAttachment struct {
@@ -617,6 +626,26 @@ func (s *chatwootService) NotifyIncomingMedia(instanceId, jid, senderName string
 	return nil
 }
 
+// numberFromChatwootContact deriva o destino de um contato do Chatwoot que o
+// evo-go ainda não conhece: prefere o identifier quando é um JID (contatos
+// criados por nós guardam o JID ali), senão usa o telefone só com dígitos.
+// Grupos são aceitos pelo identifier (xxx@g.us); canais/broadcast não.
+func numberFromChatwootContact(identifier, phone string) string {
+	if strings.Contains(identifier, "@") {
+		if !isChatwootContactJID(identifier) {
+			return ""
+		}
+		return jidFromMapping(identifier)
+	}
+	digits := strings.Map(func(r rune) rune {
+		if r >= '0' && r <= '9' {
+			return r
+		}
+		return -1
+	}, phone)
+	return digits
+}
+
 // jidFromMapping extrai o número (sem @domínio) do JID cacheado, pro send_service.
 func jidFromMapping(jid string) string {
 	if at := strings.Index(jid, "@"); at != -1 {
@@ -687,15 +716,13 @@ func (s *chatwootService) HandleAgentReply(instanceId, chatwootConversationId st
 		return nil
 	}
 
-	mapping, err := s.contactMapRepo.GetByConversationId(instanceId, chatwootConversationId)
+	cfg, err := s.repo.GetByInstanceId(instanceId)
 	if err != nil {
-		// Conversa não corresponde a nenhum contato real conhecido (ex.: é a
-		// conversa de status QR/conexão, ou webhook de outra instância) — ignora.
 		return nil
 	}
 
-	cfg, err := s.repo.GetByInstanceId(instanceId)
-	if err != nil {
+	// Conversa de status (QR/conexão) não é contato real — nunca vira envio.
+	if cfg.QrConversationId != "" && cfg.QrConversationId == chatwootConversationId {
 		return nil
 	}
 
@@ -704,7 +731,42 @@ func (s *chatwootService) HandleAgentReply(instanceId, chatwootConversationId st
 		return fmt.Errorf("instância não encontrada: %w", err)
 	}
 
-	number := jidFromMapping(mapping.Jid)
+	// Conversa criada pelo evo-go já está no cache. Conversa aberta pelo AGENTE
+	// no Chatwoot (contato salvo lá e "nova conversa") não está — antes era
+	// descartada em silêncio. Nesse caso o destino vem do contato que o próprio
+	// webhook traz (conversation.meta.sender), e o mapeamento é gravado depois do
+	// envio pra resposta do contato cair nessa mesma conversa.
+	var number string
+	mapping, mapErr := s.contactMapRepo.GetByConversationId(instanceId, chatwootConversationId)
+	if mapErr == nil {
+		number = jidFromMapping(mapping.Jid)
+	} else {
+		number = numberFromChatwootContact(reply.ContactIdentifier, reply.ContactPhone)
+		if number == "" || reply.ContactPhone == statusContactPhone(cfg.InboxId) {
+			// Sem telefone/identifier utilizável (ou é o contato sintético de status).
+			return nil
+		}
+		logger.LogInfo("[%s] chatwoot: conversa %s aberta no Chatwoot, sem mapeamento — enviando para %s", instanceId, chatwootConversationId, number)
+	}
+
+	// Depois do envio: grava/atualiza o mapeamento dessa conversa com o JID que o
+	// WhatsApp resolveu (com ou sem 9º dígito), casando com o JID das mensagens
+	// que o contato mandar de volta.
+	remember := func(chatJID string) {
+		if mapErr == nil || chatJID == "" {
+			return
+		}
+		m := &chatwoot_model.ChatwootContactMap{
+			InstanceId:             instanceId,
+			Jid:                    chatJID,
+			ChatwootContactId:      reply.ContactId,
+			ChatwootConversationId: chatwootConversationId,
+			InboxId:                cfg.InboxId,
+		}
+		if err := s.contactMapRepo.Upsert(m); err != nil {
+			logger.LogWarn("[%s] chatwoot: envio ok mas falha ao mapear conversa %s -> %s: %v", instanceId, chatwootConversationId, chatJID, err)
+		}
+	}
 
 	content := reply.Content
 	if cfg.SignMsg && reply.SenderName != "" && content != "" {
@@ -719,26 +781,28 @@ func (s *chatwootService) HandleAgentReply(instanceId, chatwootConversationId st
 			return err
 		}
 
-		waMsgID, err := s.sender.SendMedia(number, data, mediaType, filename, content, instance)
+		waMsgID, chatJID, err := s.sender.SendMedia(number, data, mediaType, filename, content, instance)
 		if err != nil {
-			logger.LogWarn("[%s] chatwoot: falha ao reenviar mídia do agente pro WhatsApp (jid=%s): %v", instanceId, mapping.Jid, err)
+			logger.LogWarn("[%s] chatwoot: falha ao reenviar mídia do agente pro WhatsApp (numero=%s): %v", instanceId, number, err)
 			return err
 		}
 		// Marca pra ignorar o eco fromMe desse envio (já está no Chatwoot).
 		markAgentSent(waMsgID)
+		remember(chatJID)
 
-		logger.LogInfo("[%s] chatwoot: mídia do agente reenviada pro WhatsApp (jid=%s)", instanceId, mapping.Jid)
+		logger.LogInfo("[%s] chatwoot: mídia do agente reenviada pro WhatsApp (jid=%s)", instanceId, chatJID)
 		return nil
 	}
 
-	waMsgID, err := s.sender.SendText(number, content, instance)
+	waMsgID, chatJID, err := s.sender.SendText(number, content, instance)
 	if err != nil {
-		logger.LogWarn("[%s] chatwoot: falha ao reenviar resposta do agente pro WhatsApp (jid=%s): %v", instanceId, mapping.Jid, err)
+		logger.LogWarn("[%s] chatwoot: falha ao reenviar resposta do agente pro WhatsApp (numero=%s): %v", instanceId, number, err)
 		return err
 	}
 	markAgentSent(waMsgID)
+	remember(chatJID)
 
-	logger.LogInfo("[%s] chatwoot: resposta do agente reenviada pro WhatsApp (jid=%s)", instanceId, mapping.Jid)
+	logger.LogInfo("[%s] chatwoot: resposta do agente reenviada pro WhatsApp (jid=%s)", instanceId, chatJID)
 	return nil
 }
 
