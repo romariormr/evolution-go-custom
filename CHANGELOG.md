@@ -1,5 +1,11 @@
 # Evolution GO - Changelog
 
+## v0.16.29
+
+### Fixes
+- **Conversa iniciada pelo agente no Chatwoot agora sai pro WhatsApp.** Salvar um contato no Chatwoot e abrir uma conversa nova com ele não enviava nada: o `HandleAgentReply` só conhecia conversas criadas pelo próprio Evolution GO (cache `chatwoot_contact_maps`) e descartava as demais em silêncio. Agora, sem mapeamento, o destino vem do contato que o próprio webhook traz (`conversation.meta.sender`: identifier quando é um JID, senão o telefone só com dígitos). Depois do envio, a conversa é mapeada com o JID que o WhatsApp resolveu (com/sem 9º dígito), então a resposta do contato cai na mesma conversa. A conversa de status (QR/conexão) e o contato sintético dela continuam sendo ignorados.
+- `MessageSender.SendText`/`SendMedia` passaram a devolver também o JID de destino resolvido (`Info.Chat`).
+
 ## v0.16.28
 
 ### Fixes
