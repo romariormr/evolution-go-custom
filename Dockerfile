@@ -9,7 +9,7 @@ RUN pnpm install --frozen-lockfile
 COPY evolution-go-manager/ ./
 RUN pnpm run build
 
-FROM golang:1.25.0-alpine AS build
+FROM golang:1.26-alpine AS build
 
 RUN apk update && apk add --no-cache git build-base libjpeg-turbo-dev libwebp-dev
 
