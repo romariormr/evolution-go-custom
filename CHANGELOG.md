@@ -1,5 +1,16 @@
 # Evolution GO - Changelog
 
+## v0.16.30
+
+### Fixes
+- **Mensagens enviadas pelo Evolution GO ficando em "Aguardando mensagem" no WhatsApp.** A biblioteca `whatsmeow` estava parada em 30/06/2026 (69 commits atrás) enquanto o WhatsApp Web configurado já é `2.3000.1048475797`. Nesse intervalo a Meta mudou o endereçamento e a criptografia das mensagens, e o destinatário (ou os outros aparelhos da própria conta) não conseguia abrir o que saía daqui. Atualizada para `b3832c2` (25/09/2026), que traz entre outros:
+  - `send: always use LID for DMs` — mensagem direta passa a ser endereçada pelo LID, como o WhatsApp exige agora;
+  - `receipt: only ack retry receipts after handling` — correção no fluxo de reenvio quando o aparelho do outro lado pede a mensagem de novo;
+  - `message: handle stateless pkmsgs correctly`, `handle root secret distribute messages properly`, `appstate: save wasa root secrets` — mudanças recentes de criptografia;
+  - protocolo atualizado até `v1047769893`.
+- Build passa a usar **Go 1.26** (mínimo exigido pela nova whatsmeow).
+- `SetProfileStatus` adaptado à nova API (`SetStatusMessage` recebe `types.SetStatusInput`).
+
 ## v0.16.29
 
 ### Fixes
