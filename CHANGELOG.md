@@ -1,5 +1,12 @@
 # Evolution GO - Changelog
 
+## v0.16.31
+
+### Features
+- **Fila anti-ban por instância.** Nova seção "Fila anti-ban" nas configurações avançadas da instância (manager e `PUT /instance/{id}/advanced-settings`). Ligada, ela conta os envios numa janela deslizante (`antiBanWindowSec`, padrão 60 s); quando a instância já mandou `antiBanLimit` mensagens (padrão 10), cada novo envio espera um atraso aleatório entre `antiBanDelayMinMs` e `antiBanDelayMaxMs` (padrão 2–6 s). Os envios da mesma instância passam um de cada vez, então rajadas (campanha, n8n em loop, vários agentes) viram um fluxo espaçado — o padrão que o WhatsApp penaliza é a saraivada. Fica no ponto único de envio (`sendService.SendMessage` + botões), então API, n8n e respostas do Chatwoot respeitam a fila. Status (`status@broadcast`) não passa por ela.
+- **"Digitando…" simulado** (`antiBanTyping`): antes de mensagem de texto para contato 1:1, mostra "digitando" por um tempo proporcional ao tamanho do texto (0,8–4 s).
+- Desligada por padrão — quem não liga não sente diferença de latência. Ideia portada do WA-AKG (reimplementada em Go; o original perde o estado e não simula digitação).
+
 ## v0.16.30
 
 ### Fixes

@@ -30,6 +30,12 @@ export interface RawInstance {
   readMessages: boolean;
   ignoreGroups: boolean;
   ignoreStatus: boolean;
+  antiBanEnabled?: boolean;
+  antiBanLimit?: number;
+  antiBanWindowSec?: number;
+  antiBanDelayMinMs?: number;
+  antiBanDelayMaxMs?: number;
+  antiBanTyping?: boolean;
 }
 
 // Normalized instance for our app
@@ -63,6 +69,12 @@ export interface Instance {
   readMessages?: boolean;
   ignoreGroups?: boolean;
   ignoreStatus?: boolean;
+  antiBanEnabled?: boolean;
+  antiBanLimit?: number;
+  antiBanWindowSec?: number;
+  antiBanDelayMinMs?: number;
+  antiBanDelayMaxMs?: number;
+  antiBanTyping?: boolean;
 }
 
 export interface CreateInstancePayload {
