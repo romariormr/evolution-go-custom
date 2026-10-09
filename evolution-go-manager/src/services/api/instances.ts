@@ -52,6 +52,12 @@ const normalizeInstance = (raw: RawInstance): Instance => {
     readMessages: raw.readMessages,
     ignoreGroups: raw.ignoreGroups,
     ignoreStatus: raw.ignoreStatus,
+    antiBanEnabled: raw.antiBanEnabled,
+    antiBanLimit: raw.antiBanLimit,
+    antiBanWindowSec: raw.antiBanWindowSec,
+    antiBanDelayMinMs: raw.antiBanDelayMinMs,
+    antiBanDelayMaxMs: raw.antiBanDelayMaxMs,
+    antiBanTyping: raw.antiBanTyping,
   };
 };
 
@@ -145,6 +151,12 @@ export interface ConnectConfig {
   readMessages?: boolean;
   ignoreGroups?: boolean;
   ignoreStatus?: boolean;
+  antiBanEnabled?: boolean;
+  antiBanLimit?: number;
+  antiBanWindowSec?: number;
+  antiBanDelayMinMs?: number;
+  antiBanDelayMaxMs?: number;
+  antiBanTyping?: boolean;
 }
 
 export interface PairConfig {
@@ -158,6 +170,12 @@ export interface AdvancedSettings {
   readMessages?: boolean;
   ignoreGroups?: boolean;
   ignoreStatus?: boolean;
+  antiBanEnabled?: boolean;
+  antiBanLimit?: number;
+  antiBanWindowSec?: number;
+  antiBanDelayMinMs?: number;
+  antiBanDelayMaxMs?: number;
+  antiBanTyping?: boolean;
 }
 
 /**

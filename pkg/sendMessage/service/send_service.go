@@ -2231,6 +2231,7 @@ func (s *sendService) SendButton(data *ButtonStruct, instance *instance_model.In
 			}},
 		}},
 	}}
+	s.throttle(instance, client, recipient, 0)
 	response, err := client.SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{
 		ID:              messageId,
 		AdditionalNodes: &bizNodes,
@@ -2744,6 +2745,10 @@ func (s *sendService) SendMessage(instance *instance_model.Instance, msg *waE2E.
 		}}
 		sendExtra.AdditionalNodes = &bizNodes
 	}
+
+	// Fila anti-ban da instância (no-op se desligada). Ponto único: todo envio
+	// que passa por aqui — API, n8n, respostas do Chatwoot — respeita a fila.
+	s.throttle(instance, s.clientPointer[instance.Id], recipient, textLenOf(messageType, msg.GetExtendedTextMessage().GetText()+msg.GetConversation()))
 
 	response, err := s.clientPointer[instance.Id].SendMessage(context.Background(), recipient, msg, sendExtra)
 	if err != nil {

@@ -174,7 +174,8 @@ func (i *instanceRepository) GetAdvancedSettings(instanceId string) (*instance_m
 	}
 
 	var instance instance_model.Instance
-	err := i.db.Select("always_online, reject_call, msg_reject_call, read_messages, ignore_groups, ignore_status").
+	err := i.db.Select("always_online, reject_call, msg_reject_call, read_messages, ignore_groups, ignore_status, "+
+		"anti_ban_enabled, anti_ban_limit, anti_ban_window_sec, anti_ban_delay_min_ms, anti_ban_delay_max_ms, anti_ban_typing").
 		Where("id = ?", instanceId).First(&instance).Error
 	if err != nil {
 		return nil, err
@@ -187,6 +188,13 @@ func (i *instanceRepository) GetAdvancedSettings(instanceId string) (*instance_m
 		ReadMessages:  instance.ReadMessages,
 		IgnoreGroups:  instance.IgnoreGroups,
 		IgnoreStatus:  instance.IgnoreStatus,
+
+		AntiBanEnabled:    instance.AntiBanEnabled,
+		AntiBanLimit:      instance.AntiBanLimit,
+		AntiBanWindowSec:  instance.AntiBanWindowSec,
+		AntiBanDelayMinMs: instance.AntiBanDelayMinMs,
+		AntiBanDelayMaxMs: instance.AntiBanDelayMaxMs,
+		AntiBanTyping:     instance.AntiBanTyping,
 	}
 
 	return settings, nil
@@ -205,6 +213,13 @@ func (i *instanceRepository) UpdateAdvancedSettings(instanceId string, settings 
 		"read_messages":   settings.ReadMessages,
 		"ignore_groups":   settings.IgnoreGroups,
 		"ignore_status":   settings.IgnoreStatus,
+
+		"anti_ban_enabled":      settings.AntiBanEnabled,
+		"anti_ban_limit":        settings.AntiBanLimit,
+		"anti_ban_window_sec":   settings.AntiBanWindowSec,
+		"anti_ban_delay_min_ms": settings.AntiBanDelayMinMs,
+		"anti_ban_delay_max_ms": settings.AntiBanDelayMaxMs,
+		"anti_ban_typing":       settings.AntiBanTyping,
 	}
 
 	err := i.db.Model(&instance_model.Instance{}).Where("id = ?", instanceId).Updates(updates).Error

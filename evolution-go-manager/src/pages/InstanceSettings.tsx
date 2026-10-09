@@ -23,6 +23,12 @@ const advancedSchema = z.object({
   readMessages: z.boolean().optional(),
   ignoreGroups: z.boolean().optional(),
   ignoreStatus: z.boolean().optional(),
+  antiBanEnabled: z.boolean().optional(),
+  antiBanLimit: z.coerce.number().int().min(1).optional(),
+  antiBanWindowSec: z.coerce.number().int().min(1).optional(),
+  antiBanDelayMinMs: z.coerce.number().int().min(0).optional(),
+  antiBanDelayMaxMs: z.coerce.number().int().min(0).optional(),
+  antiBanTyping: z.boolean().optional(),
 });
 
 const chatwootSchema = z.object({
@@ -144,6 +150,12 @@ export default function InstanceSettings() {
       readMessages: instance.readMessages || false,
       ignoreGroups: instance.ignoreGroups || false,
       ignoreStatus: instance.ignoreStatus || false,
+      antiBanEnabled: instance.antiBanEnabled || false,
+      antiBanLimit: instance.antiBanLimit || 10,
+      antiBanWindowSec: instance.antiBanWindowSec || 60,
+      antiBanDelayMinMs: instance.antiBanDelayMinMs ?? 2000,
+      antiBanDelayMaxMs: instance.antiBanDelayMaxMs || 6000,
+      antiBanTyping: instance.antiBanTyping || false,
     });
 
     // Parse events string to array (e.g., "MESSAGE,QRCODE,CONNECTION" -> ["MESSAGE", "QRCODE", "CONNECTION"])
@@ -920,6 +932,73 @@ export default function InstanceSettings() {
                     {...registerAdvanced("ignoreStatus")}
                     className="rounded border-input w-4 h-4"
                   />
+                </div>
+
+                <div className="border-t border-border pt-4 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <label
+                        htmlFor="antiBanEnabled"
+                        className="text-sm font-medium text-foreground cursor-pointer"
+                      >
+                        Fila anti-ban
+                      </label>
+                      <p className="text-xs text-muted-foreground">
+                        Espaça os envios desta instância para reduzir o risco de bloqueio do número
+                      </p>
+                    </div>
+                    <input
+                      id="antiBanEnabled"
+                      type="checkbox"
+                      {...registerAdvanced("antiBanEnabled")}
+                      className="rounded border-input w-4 h-4"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    {(
+                      [
+                        ["antiBanLimit", "Mensagens por janela", "Acima disso, cada envio passa a esperar"],
+                        ["antiBanWindowSec", "Janela (segundos)", "Período em que as mensagens são contadas"],
+                        ["antiBanDelayMinMs", "Atraso mínimo (ms)", "Espera mínima entre envios ao exceder"],
+                        ["antiBanDelayMaxMs", "Atraso máximo (ms)", "Espera máxima (o valor é sorteado)"],
+                      ] as const
+                    ).map(([field, label, help]) => (
+                      <div key={field}>
+                        <label htmlFor={field} className="text-sm font-medium text-foreground">
+                          {label}
+                        </label>
+                        <input
+                          id={field}
+                          type="number"
+                          min={0}
+                          {...registerAdvanced(field)}
+                          className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                        />
+                        <p className="text-xs text-muted-foreground mt-1">{help}</p>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <label
+                        htmlFor="antiBanTyping"
+                        className="text-sm font-medium text-foreground cursor-pointer"
+                      >
+                        Simular "digitando…"
+                      </label>
+                      <p className="text-xs text-muted-foreground">
+                        Antes de texto para contato 1:1, mostra digitando por um tempo proporcional ao tamanho (até 4s)
+                      </p>
+                    </div>
+                    <input
+                      id="antiBanTyping"
+                      type="checkbox"
+                      {...registerAdvanced("antiBanTyping")}
+                      className="rounded border-input w-4 h-4"
+                    />
+                  </div>
                 </div>
 
                 <div className="flex justify-end">
