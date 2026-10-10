@@ -1,5 +1,13 @@
 # Evolution GO - Changelog
 
+## v0.16.33
+
+### Features
+- **Mensagens agendadas.** Envio único (`sendAt`) ou recorrente (`cron` de 5 campos, no fuso `timezone`, padrão `America/Sao_Paulo`) de texto, link, mídia por URL, enquete, localização e contato. O corpo (`payload`) é o mesmo de `/send/<tipo>` e o envio passa pela fila anti-ban da instância. Tabela `scheduled_messages` (AutoMigrate).
+- Worker a cada 15 s com `FOR UPDATE SKIP LOCKED` (seguro com mais de uma réplica). Recorrente parado por um tempo sai uma vez só e segue para a próxima ocorrência; envio único atrasado mais de 6 h não sai (vira falha). Envio único interrompido por reinício vira falha em vez de reenviar (evita mensagem em dobro). Limite de 500 agendamentos ativos por instância.
+- Endpoints (apikey da instância): `GET/POST /instance/schedule/{id}`, `DELETE /instance/schedule/{id}/{scheduleId}`, `POST .../{scheduleId}/pause` e `.../resume`.
+- Manager: card "Mensagens agendadas" na configuração da instância (texto ou mídia, data/hora ou cron, pausar/retomar/apagar).
+
 ## v0.16.32
 
 ### Features

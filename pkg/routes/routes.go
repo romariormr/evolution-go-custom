@@ -19,6 +19,7 @@ import (
 	auth_middleware "github.com/EvolutionAPI/evolution-go/pkg/middleware"
 	newsletter_handler "github.com/EvolutionAPI/evolution-go/pkg/newsletter/handler"
 	poll_handler "github.com/EvolutionAPI/evolution-go/pkg/poll/handler"
+	"github.com/EvolutionAPI/evolution-go/pkg/schedule"
 	send_handler "github.com/EvolutionAPI/evolution-go/pkg/sendMessage/handler"
 	server_handler "github.com/EvolutionAPI/evolution-go/pkg/server/handler"
 	user_handler "github.com/EvolutionAPI/evolution-go/pkg/user/handler"
@@ -40,6 +41,13 @@ type Routes struct {
 	pollHandler             *poll_handler.PollHandler
 	serverHandler           server_handler.ServerHandler
 	chatwootHandler         chatwoot_handler.ChatwootHandler
+	scheduleHandler         *schedule.Handler
+}
+
+// WithSchedule liga as rotas de mensagens agendadas.
+func (r *Routes) WithSchedule(h *schedule.Handler) *Routes {
+	r.scheduleHandler = h
+	return r
 }
 
 func (r *Routes) AssignRoutes(eng *gin.Engine) {
@@ -114,6 +122,13 @@ func (r *Routes) AssignRoutes(eng *gin.Engine) {
 			routes.GET("/webhooks/:instanceId/deliveries", r.instanceHandler.ListWebhookDeliveries)
 			routes.POST("/webhooks/:instanceId/deliveries/:deliveryId/resend", r.instanceHandler.ResendWebhookDelivery)
 			routes.POST("/webhooks/:instanceId/test", r.instanceHandler.TestWebhook)
+			if r.scheduleHandler != nil {
+				routes.GET("/schedule/:instanceId", r.scheduleHandler.List)
+				routes.POST("/schedule/:instanceId", r.scheduleHandler.Create)
+				routes.DELETE("/schedule/:instanceId/:scheduleId", r.scheduleHandler.Delete)
+				routes.POST("/schedule/:instanceId/:scheduleId/pause", r.scheduleHandler.Pause)
+				routes.POST("/schedule/:instanceId/:scheduleId/resume", r.scheduleHandler.Resume)
+			}
 			routes.GET("/chatwoot/:instanceId", r.chatwootHandler.GetConfig)
 			routes.POST("/chatwoot/:instanceId", r.chatwootHandler.SetConfig)
 			routes.DELETE("/chatwoot/:instanceId", r.chatwootHandler.DeleteConfig)
