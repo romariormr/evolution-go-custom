@@ -1,5 +1,16 @@
 # Evolution GO - Changelog
 
+## v0.16.32
+
+### Features
+- **Log de entregas de webhook.** Cada entrega de evento num webhook pode ser registrada (tabela `webhook_deliveries`, criada via AutoMigrate) com evento, URL, status (`pending`/`success`/`failed`), tentativas, código HTTP, erro, trecho da resposta (até 1 KB) e latência. Modo por env `WEBHOOK_DELIVERY_LOG`: `failures` (padrão — só grava quando falha, guardando o payload pra reenvio), `all` ou `off`. Retenção: `WEBHOOK_DELIVERY_RETENTION_DAYS` (padrão 7) e no máximo 2000 por instância, limpeza a cada 6 h.
+- Endpoints (apikey da instância): `GET /instance/webhooks/{id}/deliveries?status=&limit=`, `POST /instance/webhooks/{id}/deliveries/{deliveryId}/resend` (reenvia uma entrega que falhou), `POST /instance/webhooks/{id}/test` (dispara um evento `WebhookTest` para os webhooks da instância e devolve código/latência/erro de cada um).
+- Manager: card "Entregas de webhook" na configuração da instância, com filtro, botão "Testar webhook" e "Reenviar".
+
+### Fixes
+- **Webhook sem timeout.** O cliente HTTP do webhook não tinha timeout: um destino que aceitava a conexão e não respondia prendia a goroutine para sempre. Agora 15 s por tentativa.
+- **Retry com espera crescente** (5 s, 15 s, 45 s, 2 min) no lugar de 30 s fixos; resposta lida no máximo 64 KB.
+
 ## v0.16.31
 
 ### Features

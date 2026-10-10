@@ -170,7 +170,15 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 		)
 	}
 
-	webhookProducer := webhook_producer.NewWebhookProducer(config.WebhookUrl, loggerWrapper)
+	// Log de entregas de webhook: WEBHOOK_DELIVERY_LOG = failures (padrão) | all | off.
+	// Retenção: WEBHOOK_DELIVERY_RETENTION_DAYS (padrão 7) e no máximo 2000 por instância.
+	webhookProducer := webhook_producer.NewWebhookProducerWithDeliveries(
+		config.WebhookUrl, loggerWrapper,
+		webhook_producer.NewGormDeliveryStore(db),
+		strings.ToLower(strings.TrimSpace(os.Getenv("WEBHOOK_DELIVERY_LOG"))),
+	)
+	retentionDays, _ := strconv.Atoi(os.Getenv("WEBHOOK_DELIVERY_RETENTION_DAYS"))
+	webhookProducer.StartCleanup(retentionDays, 2000)
 	websocketProducer := websocket_producer.NewWebsocketProducer(loggerWrapper)
 
 	// Cria filas globais se o RabbitMQ global estiver habilitado
@@ -293,7 +301,7 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 
 	routes.NewRouter(
 		authMiddleware,
-		instance_handler.NewInstanceHandler(instanceService, config, accessRepository),
+		instance_handler.NewInstanceHandler(instanceService, config, accessRepository, webhookProducer),
 		user_handler.NewUserHandler(userService),
 		send_handler.NewSendHandler(sendMessageService),
 		message_handler.NewMessageHandler(messageService),
@@ -416,6 +424,7 @@ func migrate(db *gorm.DB) {
 		&access_model.AccessSetting{},
 		&chatwoot_model.ChatwootConfig{},
 		&chatwoot_model.ChatwootContactMap{},
+		&webhook_producer.WebhookDelivery{},
 	)
 
 	if err != nil {
