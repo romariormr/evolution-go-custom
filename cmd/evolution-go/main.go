@@ -263,6 +263,7 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 	if strings.ToLower(strings.TrimSpace(os.Getenv("MESSAGE_HISTORY"))) != "off" {
 		whatsmeow_service.RegisterMessageHook(historyService.OnMessage)
 		whatsmeow_service.RegisterReceiptHook(historyService.OnReceipt)
+		whatsmeow_service.RegisterHistorySyncHook(historyService.OnHistorySync)
 		send_service.SentHook = historyService.OnSent
 		whatsmeow_service.MessageForRetry = historyService.ForRetry
 	}

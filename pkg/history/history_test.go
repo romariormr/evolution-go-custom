@@ -4,7 +4,9 @@ import (
 	"testing"
 
 	"go.mau.fi/whatsmeow/proto/waE2E"
+	"go.mau.fi/whatsmeow/proto/waWeb"
 	"go.mau.fi/whatsmeow/types"
+	"go.mau.fi/whatsmeow/types/events"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -66,5 +68,29 @@ func TestSkipChat(t *testing.T) {
 	}
 	if skipChat(types.NewJID("5511", types.DefaultUserServer)) {
 		t.Fatal("conversa normal não deve ser ignorada")
+	}
+}
+
+func TestWebStatus(t *testing.T) {
+	if webStatus(waWeb.WebMessageInfo_READ) != StatusRead || webStatus(waWeb.WebMessageInfo_DELIVERY_ACK) != StatusDelivered ||
+		webStatus(waWeb.WebMessageInfo_SERVER_ACK) != StatusSent || webStatus(waWeb.WebMessageInfo_PLAYED) != StatusPlayed {
+		t.Fatal("mapeamento de status do histórico errado")
+	}
+}
+
+func TestEntryFromEventSkips(t *testing.T) {
+	if entryFromEvent("i", nil, "", "") != nil {
+		t.Fatal("nil deve ser ignorado")
+	}
+	if entryFromEvent("i", &events.Message{Info: types.MessageInfo{MessageSource: types.MessageSource{Chat: types.StatusBroadcastJID}},
+		Message: &waE2E.Message{Conversation: proto.String("x")}}, "", "") != nil {
+		t.Fatal("status deve ser ignorado")
+	}
+	e := entryFromEvent("i", &events.Message{Info: types.MessageInfo{
+		MessageSource: types.MessageSource{Chat: types.NewJID("5511", types.DefaultUserServer), IsFromMe: true}, ID: "A1"},
+		Message: &waE2E.Message{ImageMessage: &waE2E.ImageMessage{Caption: proto.String("c"), Mimetype: proto.String("image/png")}}},
+		"http://minio/x.png", "image/jpeg")
+	if e == nil || e.Status != StatusSent || e.MediaUrl != "http://minio/x.png" || e.MediaMime != "image/jpeg" || e.Timestamp.IsZero() {
+		t.Fatalf("entrada inesperada: %+v", e)
 	}
 }
