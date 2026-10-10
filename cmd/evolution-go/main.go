@@ -49,6 +49,7 @@ import (
 	websocket_producer "github.com/EvolutionAPI/evolution-go/pkg/events/websocket"
 	group_handler "github.com/EvolutionAPI/evolution-go/pkg/group/handler"
 	group_service "github.com/EvolutionAPI/evolution-go/pkg/group/service"
+	"github.com/EvolutionAPI/evolution-go/pkg/history"
 	instance_handler "github.com/EvolutionAPI/evolution-go/pkg/instance/handler"
 	instance_model "github.com/EvolutionAPI/evolution-go/pkg/instance/model"
 	instance_repository "github.com/EvolutionAPI/evolution-go/pkg/instance/repository"
@@ -255,6 +256,17 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 	campaignService := campaign.NewService(db, sendMessageService, instanceRepository, loggerWrapper)
 	campaignService.StartWorker()
 	whatsmeow_service.RegisterIncomingMessageHook(campaignService.HandleIncoming)
+	// Histórico de mensagens (MESSAGE_HISTORY=off desliga a gravação; a
+	// consulta continua respondendo o que já foi gravado).
+	historyRetention, _ := strconv.Atoi(os.Getenv("MESSAGE_HISTORY_RETENTION_DAYS"))
+	historyService := history.NewService(db, loggerWrapper, historyRetention)
+	if strings.ToLower(strings.TrimSpace(os.Getenv("MESSAGE_HISTORY"))) != "off" {
+		whatsmeow_service.RegisterMessageHook(historyService.OnMessage)
+		whatsmeow_service.RegisterReceiptHook(historyService.OnReceipt)
+		send_service.SentHook = historyService.OnSent
+		whatsmeow_service.MessageForRetry = historyService.ForRetry
+	}
+	historyService.StartCleanup()
 	userService := user_service.NewUserService(clientPointer, whatsmeowService, loggerWrapper)
 	messageService := message_service.NewMessageService(clientPointer, messageRepository, whatsmeowService, loggerWrapper)
 	chatService := chat_service.NewChatService(clientPointer, whatsmeowService, loggerWrapper, messageRepository)
@@ -328,6 +340,7 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 	).WithSchedule(schedule.NewHandler(scheduleService)).
 		WithAutoReply(autoreply.NewHandler(autoReplyService)).
 		WithCampaign(campaign.NewHandler(campaignService)).
+		WithHistory(history.NewHandler(historyService)).
 		AssignRoutes(r)
 
 	// Webhook do Chatwoot (resposta do agente -> WhatsApp). O Chatwoot não manda
@@ -449,6 +462,10 @@ func migrate(db *gorm.DB) {
 
 	if err != nil {
 		log.Fatal(err)
+	}
+
+	if err := history.Migrate(db); err != nil {
+		log.Printf("histórico de mensagens: falha na migração (busca pode ficar lenta): %v", err)
 	}
 }
 

@@ -27,11 +27,11 @@ import (
 	"github.com/chai2010/webp"
 	"github.com/gabriel-vasile/mimetype"
 	"github.com/vincent-petithory/dataurl"
-	xdraw "golang.org/x/image/draw"
 	"go.mau.fi/whatsmeow"
 	waBinary "go.mau.fi/whatsmeow/binary"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
+	xdraw "golang.org/x/image/draw"
 	"golang.org/x/net/html"
 	"google.golang.org/protobuf/proto"
 )
@@ -51,6 +51,16 @@ type SendService interface {
 	SendStatusText(data *StatusTextStruct, instance *instance_model.Instance) (*MessageSendStruct, error)
 	SendStatusMediaUrl(data *StatusMediaStruct, instance *instance_model.Instance) (*MessageSendStruct, error)
 	SendStatusMediaFile(data *StatusMediaStruct, fileData []byte, instance *instance_model.Instance) (*MessageSendStruct, error)
+}
+
+// SentHook, se definido, é chamado depois de cada envio bem-sucedido pela API
+// (usado pelo histórico de mensagens). Roda em goroutine.
+var SentHook func(instance *instance_model.Instance, info types.MessageInfo, msg *waE2E.Message)
+
+func notifySent(instance *instance_model.Instance, info types.MessageInfo, msg *waE2E.Message) {
+	if SentHook != nil {
+		go SentHook(instance, info, msg)
+	}
 }
 
 type sendService struct {
@@ -111,11 +121,11 @@ type LinkStruct struct {
 	// teto ~8 KB.
 	ThumbInlineMax int          `json:"thumbInlineMax,omitempty"`
 	Id             string       `json:"id"`
-	Delay        int32        `json:"delay"`
-	MentionedJID []string     `json:"mentionedJid"`
-	MentionAll   bool         `json:"mentionAll"`
-	FormatJid    *bool        `json:"formatJid,omitempty"`
-	Quoted       QuotedStruct `json:"quoted"`
+	Delay          int32        `json:"delay"`
+	MentionedJID   []string     `json:"mentionedJid"`
+	MentionAll     bool         `json:"mentionAll"`
+	FormatJid      *bool        `json:"formatJid,omitempty"`
+	Quoted         QuotedStruct `json:"quoted"`
 }
 
 type MediaStruct struct {
@@ -190,25 +200,25 @@ type ContactStruct struct {
 //   - pix:   uses `currency` + `name` + `keyType` + `key` (must be sent alone)
 type Button struct {
 	// Button kind. One of: reply, copy, url, call, pix.
-	Type        string `json:"type" enums:"reply,copy,url,call,pix" example:"reply"`
+	Type string `json:"type" enums:"reply,copy,url,call,pix" example:"reply"`
 	// Label rendered inside the button (reply / copy / url / call). Ignored for pix.
 	DisplayText string `json:"displayText" example:"Quero saber mais"`
 	// Callback payload for `reply` or code-to-copy internal id for `copy`.
-	Id          string `json:"id" example:"btn_info"`
+	Id string `json:"id" example:"btn_info"`
 	// Code placed in the clipboard when type=copy.
-	CopyCode    string `json:"copyCode,omitempty" example:"PROMO2026"`
+	CopyCode string `json:"copyCode,omitempty" example:"PROMO2026"`
 	// Target URL when type=url.
-	URL         string `json:"url,omitempty" example:"https://evolutionapi.com"`
+	URL string `json:"url,omitempty" example:"https://evolutionapi.com"`
 	// Destination phone number (E.164) when type=call.
 	PhoneNumber string `json:"phoneNumber,omitempty" example:"+5582988898565"`
 	// ISO currency code for type=pix (e.g. BRL).
-	Currency    string `json:"currency,omitempty" example:"BRL"`
+	Currency string `json:"currency,omitempty" example:"BRL"`
 	// Merchant display name shown on the Pix sheet.
-	Name        string `json:"name,omitempty" example:"Minha Loja"`
+	Name string `json:"name,omitempty" example:"Minha Loja"`
 	// Pix key type. One of: phone, email, cpf, cnpj, random.
-	KeyType     string `json:"keyType,omitempty" enums:"phone,email,cpf,cnpj,random" example:"cpf"`
+	KeyType string `json:"keyType,omitempty" enums:"phone,email,cpf,cnpj,random" example:"cpf"`
 	// Pix key value matching the keyType.
-	Key         string `json:"key,omitempty" example:"12345678900"`
+	Key string `json:"key,omitempty" example:"12345678900"`
 }
 
 // ButtonStruct is the body for POST /send/button.
@@ -223,42 +233,42 @@ type Button struct {
 //   - safe combinations: only-reply (up to 3) OR grouped CTAs (copy + url + call).
 type ButtonStruct struct {
 	// Destination phone number.
-	Number       string       `json:"number" example:"5582988898565"`
+	Number string `json:"number" example:"5582988898565"`
 	// Optional deterministic message id. If set, it is used as the WhatsApp
 	// message id instead of a generated one — enables idempotent retry and
 	// looking the message up later via /message/status.
-	Id           string       `json:"id,omitempty"`
+	Id string `json:"id,omitempty"`
 	// Optional header image: http(s) URL or data URI (data:image/jpeg;base64,...).
 	// Renders photo + buttons in a single native message. JPEG recommended.
-	Image        string       `json:"image,omitempty"`
+	Image string `json:"image,omitempty"`
 	// Header title (required).
-	Title        string       `json:"title" example:"Oferta especial"`
+	Title string `json:"title" example:"Oferta especial"`
 	// Body description text (required).
-	Description  string       `json:"description" example:"Confira as condicoes abaixo"`
+	Description string `json:"description" example:"Confira as condicoes abaixo"`
 	// Footer text (required).
-	Footer       string       `json:"footer" example:"Evolution GO"`
+	Footer string `json:"footer" example:"Evolution GO"`
 	// Buttons array. See combination rules on the parent type description.
-	Buttons      []Button     `json:"buttons"`
+	Buttons []Button `json:"buttons"`
 	// Typing delay (milliseconds) applied before sending the message.
-	Delay        int32        `json:"delay,omitempty" example:"1200"`
+	Delay int32 `json:"delay,omitempty" example:"1200"`
 	// JIDs to mention inside the body text.
-	MentionedJID []string     `json:"mentionedJid,omitempty"`
+	MentionedJID []string `json:"mentionedJid,omitempty"`
 	// Mention every participant (groups only).
-	MentionAll   bool         `json:"mentionAll,omitempty"`
+	MentionAll bool `json:"mentionAll,omitempty"`
 	// If false, skips automatic formatting/validation of `number` into a JID.
-	FormatJid    *bool        `json:"formatJid,omitempty"`
+	FormatJid *bool `json:"formatJid,omitempty"`
 	// Quoted (reply-to) context.
-	Quoted       QuotedStruct `json:"quoted,omitempty"`
+	Quoted QuotedStruct `json:"quoted,omitempty"`
 }
 
 // Row is a selectable item inside a list Section.
 type Row struct {
 	// Row main label.
-	Title       string `json:"title" example:"Plano Basico"`
+	Title string `json:"title" example:"Plano Basico"`
 	// Optional secondary line below the title.
 	Description string `json:"description,omitempty" example:"R$ 29,90/mes"`
 	// Callback payload returned when the user taps the row. Auto-generated if empty.
-	RowId       string `json:"rowId,omitempty" example:"plan_basic"`
+	RowId string `json:"rowId,omitempty" example:"plan_basic"`
 }
 
 // Section groups related Rows under an optional title.
@@ -266,7 +276,7 @@ type Section struct {
 	// Section heading (optional; rendered as a group separator).
 	Title string `json:"title,omitempty" example:"Planos"`
 	// Rows inside this section.
-	Rows  []Row  `json:"rows"`
+	Rows []Row `json:"rows"`
 }
 
 // ListStruct is the body for POST /send/list.
@@ -274,27 +284,27 @@ type Section struct {
 // Renders as a single-select menu (legacy ListMessage format — compatible with iOS, Android and WhatsApp Web).
 type ListStruct struct {
 	// Destination phone number.
-	Number       string       `json:"number" example:"5582988898565"`
+	Number string `json:"number" example:"5582988898565"`
 	// Header title (required).
-	Title        string       `json:"title" example:"Nossos planos"`
+	Title string `json:"title" example:"Nossos planos"`
 	// Body description text (required).
-	Description  string       `json:"description" example:"Escolha o plano ideal para voce"`
+	Description string `json:"description" example:"Escolha o plano ideal para voce"`
 	// Label of the button that opens the list. Defaults to "Ver Menu" when empty.
-	ButtonText   string       `json:"buttonText" example:"Abrir cardapio"`
+	ButtonText string `json:"buttonText" example:"Abrir cardapio"`
 	// Footer text (required).
-	FooterText   string       `json:"footerText" example:"Evolution GO"`
+	FooterText string `json:"footerText" example:"Evolution GO"`
 	// Sections with rows. At least one section with one row is required.
-	Sections     []Section    `json:"sections"`
+	Sections []Section `json:"sections"`
 	// Typing delay (milliseconds) applied before sending the message.
-	Delay        int32        `json:"delay,omitempty" example:"1200"`
+	Delay int32 `json:"delay,omitempty" example:"1200"`
 	// JIDs to mention inside the body text.
-	MentionedJID []string     `json:"mentionedJid,omitempty"`
+	MentionedJID []string `json:"mentionedJid,omitempty"`
 	// Mention every participant (groups only).
-	MentionAll   bool         `json:"mentionAll,omitempty"`
+	MentionAll bool `json:"mentionAll,omitempty"`
 	// If false, skips automatic formatting/validation of `number` into a JID.
-	FormatJid    *bool        `json:"formatJid,omitempty"`
+	FormatJid *bool `json:"formatJid,omitempty"`
 	// Quoted (reply-to) context.
-	Quoted       QuotedStruct `json:"quoted,omitempty"`
+	Quoted QuotedStruct `json:"quoted,omitempty"`
 }
 
 // CarouselButtonStruct is a button attached to a single carousel card.
@@ -315,20 +325,20 @@ type ListStruct struct {
 // mixed sets do not render on WhatsApp Web. Prefer only-REPLY or only-CTAs per card.
 type CarouselButtonStruct struct {
 	// Button kind (case-insensitive). One of: REPLY (default), URL, CALL, COPY.
-	Type        string `json:"type" enums:"REPLY,URL,CALL,COPY,reply,url,call,copy" example:"REPLY"`
+	Type string `json:"type" enums:"REPLY,URL,CALL,COPY,reply,url,call,copy" example:"REPLY"`
 	// Label rendered inside the button.
 	DisplayText string `json:"displayText" example:"Quero saber mais"`
 	// Context-dependent: REPLY payload, URL target (type=URL) or phone number (type=CALL).
-	Id          string `json:"id" example:"card1_info"`
+	Id string `json:"id" example:"card1_info"`
 	// Code placed in the clipboard when type=COPY.
-	CopyCode    string `json:"copyCode,omitempty" example:"PROMO2026"`
+	CopyCode string `json:"copyCode,omitempty" example:"PROMO2026"`
 }
 
 // CarouselCardHeaderStruct is the top area of a carousel card.
 // Either `imageUrl` OR `videoUrl` may be provided (image takes precedence when both are set).
 type CarouselCardHeaderStruct struct {
 	// Optional visible title above the media.
-	Title    string `json:"title,omitempty" example:"Oferta do dia"`
+	Title string `json:"title,omitempty" example:"Oferta do dia"`
 	// Optional subtitle rendered below the title.
 	Subtitle string `json:"subtitle,omitempty" example:"Somente hoje"`
 	// Public URL to an image. Downloaded, uploaded to WhatsApp servers and used as card media.
@@ -347,13 +357,13 @@ type CarouselCardBodyStruct struct {
 // Each card requires at least `header` + `body`.
 type CarouselCardStruct struct {
 	// Card header (media + title/subtitle).
-	Header  CarouselCardHeaderStruct `json:"header"`
+	Header CarouselCardHeaderStruct `json:"header"`
 	// Card body text (required).
-	Body    CarouselCardBodyStruct   `json:"body"`
+	Body CarouselCardBodyStruct `json:"body"`
 	// Optional footer rendered under the body.
-	Footer  string                   `json:"footer,omitempty" example:"Por tempo limitado"`
+	Footer string `json:"footer,omitempty" example:"Por tempo limitado"`
 	// Buttons shown on the card. See CarouselButtonStruct for combination rules.
-	Buttons []CarouselButtonStruct   `json:"buttons,omitempty"`
+	Buttons []CarouselButtonStruct `json:"buttons,omitempty"`
 }
 
 // CarouselStruct is the body for POST /send/carousel.
@@ -362,21 +372,21 @@ type CarouselCardStruct struct {
 // Each card must have `header` + `body`; button rules are described on CarouselButtonStruct.
 type CarouselStruct struct {
 	// Destination phone number.
-	Number    string               `json:"number" example:"5582988898565"`
+	Number string `json:"number" example:"5582988898565"`
 	// Optional deterministic message id (idempotent retry / status lookup).
-	Id        string               `json:"id,omitempty"`
+	Id string `json:"id,omitempty"`
 	// Optional message body shown above the cards.
-	Body      string               `json:"body,omitempty" example:"Confira nossas novidades!"`
+	Body string `json:"body,omitempty" example:"Confira nossas novidades!"`
 	// Optional message footer shown below the cards.
-	Footer    string               `json:"footer,omitempty" example:"Evolution GO"`
+	Footer string `json:"footer,omitempty" example:"Evolution GO"`
 	// Typing delay (milliseconds) applied before sending the message.
-	Delay     int32                `json:"delay,omitempty" example:"1200"`
+	Delay int32 `json:"delay,omitempty" example:"1200"`
 	// If false, skips automatic formatting/validation of `number` into a JID.
-	FormatJid *bool                `json:"formatJid,omitempty"`
+	FormatJid *bool `json:"formatJid,omitempty"`
 	// Quoted (reply-to) context.
-	Quoted    QuotedStruct         `json:"quoted,omitempty"`
+	Quoted QuotedStruct `json:"quoted,omitempty"`
 	// Cards displayed in order. At least one card is required.
-	Cards     []CarouselCardStruct `json:"cards"`
+	Cards []CarouselCardStruct `json:"cards"`
 }
 
 type StatusTextStruct struct {
@@ -2062,19 +2072,19 @@ func (s *sendService) SendButton(data *ButtonStruct, instance *instance_model.In
 			randomId := utils.GenerateRandomString(11)
 			name = proto.String("payment_info")
 			pixParams := map[string]interface{}{
-				"currency": v.Currency,
+				"currency":     v.Currency,
 				"total_amount": map[string]int{"value": 0, "offset": 100},
 				"reference_id": randomId,
-				"type": "physical-goods",
+				"type":         "physical-goods",
 				"order": map[string]interface{}{
-					"status": "pending",
-					"subtotal": map[string]int{"value": 0, "offset": 100},
+					"status":     "pending",
+					"subtotal":   map[string]int{"value": 0, "offset": 100},
 					"order_type": "ORDER",
 					"items": []map[string]interface{}{
 						{
-							"name": "",
-							"amount": map[string]int{"value": 0, "offset": 100},
-							"quantity": 0,
+							"name":        "",
+							"amount":      map[string]int{"value": 0, "offset": 100},
+							"quantity":    0,
 							"sale_amount": map[string]int{"value": 0, "offset": 100},
 						},
 					},
@@ -2252,6 +2262,7 @@ func (s *sendService) SendButton(data *ButtonStruct, instance *instance_model.In
 		ServerID:  response.ServerID,
 		Type:      "ButtonMessage",
 	}
+	notifySent(instance, messageInfo, msg)
 
 	messageSent := &MessageSendStruct{
 		Info:    messageInfo,
@@ -2770,6 +2781,7 @@ func (s *sendService) SendMessage(instance *instance_model.Instance, msg *waE2E.
 		ServerID:  response.ServerID,
 		Type:      messageType,
 	}
+	notifySent(instance, messageInfo, msg)
 
 	messageSent := &MessageSendStruct{
 		Info:    messageInfo,

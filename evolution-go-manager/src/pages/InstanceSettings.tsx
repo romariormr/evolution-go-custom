@@ -12,6 +12,7 @@ import { WebhookDeliveries } from "@/components/instances/WebhookDeliveries";
 import { ScheduledMessages } from "@/components/instances/ScheduledMessages";
 import { AutoReplyRules } from "@/components/instances/AutoReplyRules";
 import { Campaigns } from "@/components/instances/Campaigns";
+import { MessageHistory } from "@/components/instances/MessageHistory";
 
 const webhookSchema = z.object({
   webhookUrl: z.string().url("URL inválida").optional().or(z.literal("")),
@@ -659,6 +660,10 @@ export default function InstanceSettings() {
 
           {instance?.id && instance?.apikey && (
             <Campaigns instanceId={instance.id} instanceToken={instance.apikey} />
+          )}
+
+          {instance?.id && instance?.apikey && (
+            <MessageHistory instanceId={instance.id} instanceToken={instance.apikey} />
           )}
 
           {/* Chatwoot Settings Card */}
