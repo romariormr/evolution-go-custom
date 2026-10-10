@@ -9,6 +9,7 @@ import { z } from "zod";
 import * as instancesApi from "@/services/api/instances";
 import type { Instance } from "@/types/instance";
 import { WebhookDeliveries } from "@/components/instances/WebhookDeliveries";
+import { ScheduledMessages } from "@/components/instances/ScheduledMessages";
 
 const webhookSchema = z.object({
   webhookUrl: z.string().url("URL inválida").optional().or(z.literal("")),
@@ -644,6 +645,10 @@ export default function InstanceSettings() {
 
           {instance?.id && instance?.apikey && (
             <WebhookDeliveries instanceId={instance.id} instanceToken={instance.apikey} />
+          )}
+
+          {instance?.id && instance?.apikey && (
+            <ScheduledMessages instanceId={instance.id} instanceToken={instance.apikey} />
           )}
 
           {/* Chatwoot Settings Card */}

@@ -66,6 +66,7 @@ import (
 	newsletter_service "github.com/EvolutionAPI/evolution-go/pkg/newsletter/service"
 	poll_handler "github.com/EvolutionAPI/evolution-go/pkg/poll/handler"
 	routes "github.com/EvolutionAPI/evolution-go/pkg/routes"
+	"github.com/EvolutionAPI/evolution-go/pkg/schedule"
 	send_handler "github.com/EvolutionAPI/evolution-go/pkg/sendMessage/handler"
 	send_service "github.com/EvolutionAPI/evolution-go/pkg/sendMessage/service"
 	server_handler "github.com/EvolutionAPI/evolution-go/pkg/server/handler"
@@ -244,6 +245,8 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 	)
 	sendMessageService := send_service.NewSendService(clientPointer, whatsmeowService, config, loggerWrapper)
 	chatwootService.SetSender(chatwootMessageSenderAdapter{sendService: sendMessageService})
+	scheduleService := schedule.NewService(db, sendMessageService, instanceRepository, loggerWrapper)
+	scheduleService.Start()
 	userService := user_service.NewUserService(clientPointer, whatsmeowService, loggerWrapper)
 	messageService := message_service.NewMessageService(clientPointer, messageRepository, whatsmeowService, loggerWrapper)
 	chatService := chat_service.NewChatService(clientPointer, whatsmeowService, loggerWrapper, messageRepository)
@@ -314,7 +317,7 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 		pollHandler,
 		server_handler.NewServerHandler(),
 		chatwootHandler,
-	).AssignRoutes(r)
+	).WithSchedule(schedule.NewHandler(scheduleService)).AssignRoutes(r)
 
 	// Webhook do Chatwoot (resposta do agente -> WhatsApp). O Chatwoot não manda
 	// apikey, então autenticamos por segredo compartilhado na URL/header:
@@ -425,6 +428,7 @@ func migrate(db *gorm.DB) {
 		&chatwoot_model.ChatwootConfig{},
 		&chatwoot_model.ChatwootContactMap{},
 		&webhook_producer.WebhookDelivery{},
+		&schedule.ScheduledMessage{},
 	)
 
 	if err != nil {
