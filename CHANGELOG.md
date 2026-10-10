@@ -1,5 +1,18 @@
 # Evolution GO - Changelog
 
+## v0.16.35
+
+### Features
+- **Campanhas (disparo em massa) com acompanhamento por destinatário.** Tabelas `campaigns`, `campaign_recipients` e `campaign_optouts` (AutoMigrate). Texto ou mídia por URL, com `{{name}}` e `{{<var>}}` por destinatário; até 10.000 destinatários por campanha, deduplicados.
+- Envio um por vez: pela fila anti-ban da instância **e** com intervalo aleatório próprio da campanha (padrão 3–8 s). Estado todo no banco: a campanha continua de onde parou depois de um reinício (`FOR UPDATE SKIP LOCKED`). 5 falhas seguidas pausam a campanha (ex.: instância desconectada) com o motivo em `lastError`.
+- Ações: iniciar (ou `startAt` para agendar o início), pausar, cancelar (pendentes viram "pulados"), reenviar falhas, apagar.
+- **Descadastro (LGPD):** quem responde SAIR / PARAR / STOP / DESCADASTRAR entra na lista de descadastro da instância, sai da fila das campanhas em andamento e é pulado nas próximas. Lista consultável e editável.
+- Endpoints (apikey da instância): `GET/POST /instance/campaign/{id}`, `GET/DELETE /instance/campaign/{id}/{campaignId}`, `GET .../recipients?status=`, `POST .../start|pause|cancel|retry`; `GET/POST /instance/optout/{id}`, `DELETE /instance/optout/{id}/{number}`.
+- Manager: card "Campanhas" com progresso, destinatários por status e lista de descadastrados.
+
+### Fixes
+- Apagar uma instância agora apaga também os dados dela nas features novas (log de webhook, agendamentos, respostas automáticas, campanhas, descadastros). Antes ficavam órfãos.
+
 ## v0.16.34
 
 ### Features

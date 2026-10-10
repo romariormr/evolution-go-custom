@@ -10,6 +10,7 @@ import (
 	_ "github.com/EvolutionAPI/evolution-go/docs"
 	"github.com/EvolutionAPI/evolution-go/pkg/autoreply"
 	call_handler "github.com/EvolutionAPI/evolution-go/pkg/call/handler"
+	"github.com/EvolutionAPI/evolution-go/pkg/campaign"
 	chat_handler "github.com/EvolutionAPI/evolution-go/pkg/chat/handler"
 	chatwoot_handler "github.com/EvolutionAPI/evolution-go/pkg/chatwoot/handler"
 	community_handler "github.com/EvolutionAPI/evolution-go/pkg/community/handler"
@@ -44,6 +45,13 @@ type Routes struct {
 	chatwootHandler         chatwoot_handler.ChatwootHandler
 	scheduleHandler         *schedule.Handler
 	autoReplyHandler        *autoreply.Handler
+	campaignHandler         *campaign.Handler
+}
+
+// WithCampaign liga as rotas de campanhas e descadastro.
+func (r *Routes) WithCampaign(h *campaign.Handler) *Routes {
+	r.campaignHandler = h
+	return r
 }
 
 // WithAutoReply liga as rotas de respostas automáticas.
@@ -142,6 +150,20 @@ func (r *Routes) AssignRoutes(eng *gin.Engine) {
 				routes.POST("/autoreply/:instanceId", r.autoReplyHandler.Create)
 				routes.PUT("/autoreply/:instanceId/:ruleId", r.autoReplyHandler.Update)
 				routes.DELETE("/autoreply/:instanceId/:ruleId", r.autoReplyHandler.Delete)
+			}
+			if r.campaignHandler != nil {
+				routes.GET("/campaign/:instanceId", r.campaignHandler.List)
+				routes.POST("/campaign/:instanceId", r.campaignHandler.Create)
+				routes.GET("/campaign/:instanceId/:campaignId", r.campaignHandler.Get)
+				routes.DELETE("/campaign/:instanceId/:campaignId", r.campaignHandler.Delete)
+				routes.GET("/campaign/:instanceId/:campaignId/recipients", r.campaignHandler.Recipients)
+				routes.POST("/campaign/:instanceId/:campaignId/start", r.campaignHandler.Start())
+				routes.POST("/campaign/:instanceId/:campaignId/pause", r.campaignHandler.Pause())
+				routes.POST("/campaign/:instanceId/:campaignId/cancel", r.campaignHandler.Cancel())
+				routes.POST("/campaign/:instanceId/:campaignId/retry", r.campaignHandler.Retry())
+				routes.GET("/optout/:instanceId", r.campaignHandler.ListOptOuts)
+				routes.POST("/optout/:instanceId", r.campaignHandler.AddOptOut)
+				routes.DELETE("/optout/:instanceId/:number", r.campaignHandler.RemoveOptOut)
 			}
 			routes.GET("/chatwoot/:instanceId", r.chatwootHandler.GetConfig)
 			routes.POST("/chatwoot/:instanceId", r.chatwootHandler.SetConfig)

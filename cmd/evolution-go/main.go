@@ -31,6 +31,7 @@ import (
 	"github.com/EvolutionAPI/evolution-go/pkg/autoreply"
 	call_handler "github.com/EvolutionAPI/evolution-go/pkg/call/handler"
 	call_service "github.com/EvolutionAPI/evolution-go/pkg/call/service"
+	"github.com/EvolutionAPI/evolution-go/pkg/campaign"
 	chat_handler "github.com/EvolutionAPI/evolution-go/pkg/chat/handler"
 	chat_service "github.com/EvolutionAPI/evolution-go/pkg/chat/service"
 	chatwoot_handler "github.com/EvolutionAPI/evolution-go/pkg/chatwoot/handler"
@@ -251,6 +252,9 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 	autoReplyService := autoreply.NewService(db, sendMessageService, chatwootService, loggerWrapper)
 	autoReplyService.StartCleanup()
 	whatsmeow_service.RegisterIncomingMessageHook(autoReplyService.HandleIncoming)
+	campaignService := campaign.NewService(db, sendMessageService, instanceRepository, loggerWrapper)
+	campaignService.StartWorker()
+	whatsmeow_service.RegisterIncomingMessageHook(campaignService.HandleIncoming)
 	userService := user_service.NewUserService(clientPointer, whatsmeowService, loggerWrapper)
 	messageService := message_service.NewMessageService(clientPointer, messageRepository, whatsmeowService, loggerWrapper)
 	chatService := chat_service.NewChatService(clientPointer, whatsmeowService, loggerWrapper, messageRepository)
@@ -323,6 +327,7 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 		chatwootHandler,
 	).WithSchedule(schedule.NewHandler(scheduleService)).
 		WithAutoReply(autoreply.NewHandler(autoReplyService)).
+		WithCampaign(campaign.NewHandler(campaignService)).
 		AssignRoutes(r)
 
 	// Webhook do Chatwoot (resposta do agente -> WhatsApp). O Chatwoot não manda
@@ -437,6 +442,9 @@ func migrate(db *gorm.DB) {
 		&schedule.ScheduledMessage{},
 		&autoreply.Rule{},
 		&autoreply.Cooldown{},
+		&campaign.Campaign{},
+		&campaign.Recipient{},
+		&campaign.OptOut{},
 	)
 
 	if err != nil {
