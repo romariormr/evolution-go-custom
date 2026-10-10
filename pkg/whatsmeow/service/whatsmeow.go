@@ -99,6 +99,28 @@ var (
 	MessageForRetry func(instanceId string, to types.JID, id types.MessageID) *waE2E.Message
 )
 
+// HistorySyncHook recebe os lotes de histórico que o celular manda ao parear
+// (ou sob demanda via /chat/history-sync). O client vem junto para converter
+// as mensagens (ParseWebMessage).
+type HistorySyncHook func(instance *instance_model.Instance, client *whatsmeow.Client, evt *events.HistorySync)
+
+var historySyncHooks []HistorySyncHook
+
+func RegisterHistorySyncHook(h HistorySyncHook) {
+	incomingHooksMu.Lock()
+	historySyncHooks = append(historySyncHooks, h)
+	incomingHooksMu.Unlock()
+}
+
+func dispatchHistorySyncHooks(instance *instance_model.Instance, client *whatsmeow.Client, evt *events.HistorySync) {
+	incomingHooksMu.RLock()
+	hooks := historySyncHooks
+	incomingHooksMu.RUnlock()
+	for _, h := range hooks {
+		go h(instance, client, evt)
+	}
+}
+
 func RegisterMessageHook(h MessageHook) {
 	incomingHooksMu.Lock()
 	messageHooks = append(messageHooks, h)
@@ -2076,6 +2098,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		postMap["event"] = "HistorySync"
 
 		mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] History sync event received %+v", mycli.userID, evt.Data.SyncType)
+		dispatchHistorySyncHooks(mycli.Instance, mycli.WAClient, evt)
 	case *events.AppState:
 		mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] App state event received %+v", mycli.userID, evt)
 	case *events.LoggedOut:

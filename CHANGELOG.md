@@ -1,5 +1,10 @@
 # Evolution GO - Changelog
 
+## v0.16.37
+
+### Features
+- **Histórico importa o que já existe no celular.** O lote de histórico que o WhatsApp manda ao parear (e o pedido sob demanda `POST /chat/history-sync`) agora entra no `message_history`, com tipo, texto/legenda, nome de arquivo e status de entrega das enviadas. Mídia antiga não é baixada (fica o registro, sem `mediaUrl`). Mensagens já gravadas não duplicam.
+
 ## v0.16.36
 
 ### Features

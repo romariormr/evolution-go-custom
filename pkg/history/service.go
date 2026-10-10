@@ -6,7 +6,9 @@ import (
 	"strings"
 	"time"
 
+	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
+	"go.mau.fi/whatsmeow/proto/waWeb"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	"google.golang.org/protobuf/proto"
@@ -61,18 +63,15 @@ func skipChat(chat types.JID) bool {
 
 // ---- gravação ----
 
-// OnMessage registra uma mensagem recebida (ou enviada pelo celular).
-func (s *Service) OnMessage(instance *instance_model.Instance, evt *events.Message, mediaURL, mediaMime string) {
-	if instance == nil || evt == nil || evt.Message == nil || skipChat(evt.Info.Chat) {
-		return
-	}
-	if pm := evt.Message.GetProtocolMessage(); pm != nil {
-		s.applyProtocol(instance.Id, pm)
-		return
+// entryFromEvent monta a linha de uma mensagem (nil para o que não vai pro
+// histórico: reação, voto, protocolo, status).
+func entryFromEvent(instanceId string, evt *events.Message, mediaURL, mediaMime string) *Entry {
+	if evt == nil || evt.Message == nil || skipChat(evt.Info.Chat) {
+		return nil
 	}
 	msgType, content, mime, fileName, quoted := describe(evt.Message)
 	if msgType == "reaction" || msgType == "poll_vote" || msgType == "protocol" {
-		return
+		return nil
 	}
 	if mediaMime != "" {
 		mime = mediaMime
@@ -82,7 +81,7 @@ func (s *Service) OnMessage(instance *instance_model.Instance, evt *events.Messa
 		status = StatusSent
 	}
 	e := &Entry{
-		InstanceId: instance.Id,
+		InstanceId: instanceId,
 		MessageId:  evt.Info.ID,
 		ChatJid:    evt.Info.Chat.String(),
 		SenderJid:  evt.Info.Sender.ToNonAD().String(),
@@ -102,8 +101,88 @@ func (s *Service) OnMessage(instance *instance_model.Instance, evt *events.Messa
 	if e.Timestamp.IsZero() {
 		e.Timestamp = time.Now().UTC()
 	}
+	return e
+}
+
+// OnMessage registra uma mensagem recebida (ou enviada pelo celular).
+func (s *Service) OnMessage(instance *instance_model.Instance, evt *events.Message, mediaURL, mediaMime string) {
+	if instance == nil || evt == nil || evt.Message == nil {
+		return
+	}
+	if pm := evt.Message.GetProtocolMessage(); pm != nil {
+		s.applyProtocol(instance.Id, pm)
+		return
+	}
+	e := entryFromEvent(instance.Id, evt, mediaURL, mediaMime)
+	if e == nil {
+		return
+	}
 	if err := s.db.Clauses(clause.OnConflict{DoNothing: true}).Create(e).Error; err != nil {
 		s.logWarn(instance.Id, "[HISTORY] erro ao gravar %s: %v", evt.Info.ID, err)
+	}
+}
+
+// webStatus traduz o status gravado no histórico do celular.
+func webStatus(st waWeb.WebMessageInfo_Status) string {
+	switch st {
+	case waWeb.WebMessageInfo_DELIVERY_ACK:
+		return StatusDelivered
+	case waWeb.WebMessageInfo_READ:
+		return StatusRead
+	case waWeb.WebMessageInfo_PLAYED:
+		return StatusPlayed
+	}
+	return StatusSent
+}
+
+// OnHistorySync importa o histórico que o celular manda (ao parear ou sob
+// demanda). Mídia antiga não é baixada: fica o tipo, legenda e nome do arquivo.
+func (s *Service) OnHistorySync(instance *instance_model.Instance, client *whatsmeow.Client, evt *events.HistorySync) {
+	if instance == nil || client == nil || evt == nil || evt.Data == nil {
+		return
+	}
+	var batch []*Entry
+	total := 0
+	flush := func() {
+		if len(batch) == 0 {
+			return
+		}
+		if err := s.db.Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(batch, 500).Error; err != nil {
+			s.logWarn(instance.Id, "[HISTORY] erro ao importar histórico: %v", err)
+		}
+		total += len(batch)
+		batch = batch[:0]
+	}
+	for _, conv := range evt.Data.GetConversations() {
+		chat, err := types.ParseJID(conv.GetID())
+		if err != nil || skipChat(chat) {
+			continue
+		}
+		for _, hm := range conv.GetMessages() {
+			wm := hm.GetMessage()
+			if wm == nil {
+				continue
+			}
+			parsed, err := client.ParseWebMessage(chat, wm)
+			if err != nil {
+				continue
+			}
+			e := entryFromEvent(instance.Id, parsed, "", "")
+			if e == nil {
+				continue
+			}
+			if e.FromMe {
+				e.Status = webStatus(wm.GetStatus())
+			}
+			batch = append(batch, e)
+			if len(batch) >= 1000 {
+				flush()
+			}
+		}
+	}
+	flush()
+	if s.logger != nil && total > 0 {
+		s.logger.GetLogger(instance.Id).LogInfo("[HISTORY] histórico importado (%s): %d mensagens", evt.Data.GetSyncType().String(), total)
 	}
 }
 
