@@ -82,6 +82,53 @@ func RegisterIncomingMessageHook(h IncomingMessageHook) {
 	incomingHooksMu.Unlock()
 }
 
+// MessageHook recebe TODA mensagem processada (recebida ou enviada pelo
+// celular), com a URL da mídia no MinIO quando houver. Usado pelo histórico.
+type MessageHook func(instance *instance_model.Instance, evt *events.Message, mediaURL, mediaMime string)
+
+// ReceiptHook recebe os recibos (entregue/lida/ouvida).
+type ReceiptHook func(instance *instance_model.Instance, evt *events.Receipt)
+
+var (
+	messageHooks []MessageHook
+	receiptHooks []ReceiptHook
+
+	// MessageForRetry, se definido, é consultado quando o destinatário pede
+	// reenvio (retry receipt) de uma mensagem que não está mais no cache do
+	// whatsmeow. Recebe a instância, o destino e o ID.
+	MessageForRetry func(instanceId string, to types.JID, id types.MessageID) *waE2E.Message
+)
+
+func RegisterMessageHook(h MessageHook) {
+	incomingHooksMu.Lock()
+	messageHooks = append(messageHooks, h)
+	incomingHooksMu.Unlock()
+}
+
+func RegisterReceiptHook(h ReceiptHook) {
+	incomingHooksMu.Lock()
+	receiptHooks = append(receiptHooks, h)
+	incomingHooksMu.Unlock()
+}
+
+func dispatchMessageHooks(instance *instance_model.Instance, evt *events.Message, mediaURL, mediaMime string) {
+	incomingHooksMu.RLock()
+	hooks := messageHooks
+	incomingHooksMu.RUnlock()
+	for _, h := range hooks {
+		go h(instance, evt, mediaURL, mediaMime)
+	}
+}
+
+func dispatchReceiptHooks(instance *instance_model.Instance, evt *events.Receipt) {
+	incomingHooksMu.RLock()
+	hooks := receiptHooks
+	incomingHooksMu.RUnlock()
+	for _, h := range hooks {
+		go h(instance, evt)
+	}
+}
+
 func dispatchIncomingHooks(instance *instance_model.Instance, info types.MessageInfo, text string) {
 	incomingHooksMu.RLock()
 	hooks := incomingHooks
@@ -468,6 +515,16 @@ func (w whatsmeowService) StartClient(cd *ClientData) {
 	}
 	clientLog := waLog.Stdout("Client", minLevel, true)
 	client := whatsmeow.NewClient(deviceStore, clientLog)
+	// Guarda as mensagens enviadas no banco do whatsmeow para atender pedidos
+	// de reenvio (retry) mesmo depois de reiniciar — sem isso o destinatário
+	// fica com "Aguardando mensagem" se o reenvio chegar após um restart.
+	client.UseRetryMessageStore = true
+	if MessageForRetry != nil {
+		retryInstanceId := cd.Instance.Id
+		client.GetMessageForRetry = func(requester, to types.JID, id types.MessageID) *waE2E.Message {
+			return MessageForRetry(retryInstanceId, to, id)
+		}
+	}
 
 	w.clientPointer[cd.Instance.Id] = client
 
@@ -1184,6 +1241,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 	case *events.Message:
 		doWebhook = true
 		postMap["event"] = "Message"
+		var historyMediaURL, historyMediaMime string
 		// Keep a canonical per-chat activity index. Group metadata does not carry
 		// the last message timestamp, so this event is the authoritative source.
 		if mycli.config.DatabaseSaveMessages {
@@ -1726,6 +1784,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 							mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] S3/Minio upload successful - ID: %s, Size: %d bytes, Duration: %v, URL: %s", mycli.userID, evt.Info.ID, len(data), storageDuration, mediaURL)
 							messageMap["mediaUrl"] = mediaURL
 							messageMap["mimetype"] = mimeType
+							historyMediaURL, historyMediaMime = mediaURL, mimeType
 						}
 					} else {
 						mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Encoding to base64 - ID: %s, Size: %d bytes", mycli.userID, evt.Info.ID, len(data))
@@ -1904,6 +1963,8 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 			}
 		}
 
+		dispatchMessageHooks(mycli.Instance, evt, historyMediaURL, historyMediaMime)
+
 		if !evt.Info.IsFromMe {
 			hookText := evt.Message.GetConversation()
 			if hookText == "" {
@@ -1916,6 +1977,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 	case *events.Receipt:
 		doWebhook = true
 		postMap["event"] = "Receipt"
+		dispatchReceiptHooks(mycli.Instance, evt)
 
 		// se ignoreGroup for true e o chat for grupo retorna
 		if mycli.Instance.IgnoreGroups && strings.Contains(evt.Chat.String(), "@g.us") {

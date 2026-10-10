@@ -15,6 +15,7 @@ import (
 	chatwoot_handler "github.com/EvolutionAPI/evolution-go/pkg/chatwoot/handler"
 	community_handler "github.com/EvolutionAPI/evolution-go/pkg/community/handler"
 	group_handler "github.com/EvolutionAPI/evolution-go/pkg/group/handler"
+	"github.com/EvolutionAPI/evolution-go/pkg/history"
 	instance_handler "github.com/EvolutionAPI/evolution-go/pkg/instance/handler"
 	label_handler "github.com/EvolutionAPI/evolution-go/pkg/label/handler"
 	message_handler "github.com/EvolutionAPI/evolution-go/pkg/message/handler"
@@ -46,6 +47,13 @@ type Routes struct {
 	scheduleHandler         *schedule.Handler
 	autoReplyHandler        *autoreply.Handler
 	campaignHandler         *campaign.Handler
+	historyHandler          *history.Handler
+}
+
+// WithHistory liga as rotas do histórico de mensagens.
+func (r *Routes) WithHistory(h *history.Handler) *Routes {
+	r.historyHandler = h
+	return r
 }
 
 // WithCampaign liga as rotas de campanhas e descadastro.
@@ -164,6 +172,11 @@ func (r *Routes) AssignRoutes(eng *gin.Engine) {
 				routes.GET("/optout/:instanceId", r.campaignHandler.ListOptOuts)
 				routes.POST("/optout/:instanceId", r.campaignHandler.AddOptOut)
 				routes.DELETE("/optout/:instanceId/:number", r.campaignHandler.RemoveOptOut)
+			}
+			if r.historyHandler != nil {
+				routes.GET("/history/:instanceId", r.historyHandler.Search)
+				routes.GET("/history/:instanceId/chats", r.historyHandler.Chats)
+				routes.GET("/history/:instanceId/message/:messageId", r.historyHandler.Get)
 			}
 			routes.GET("/chatwoot/:instanceId", r.chatwootHandler.GetConfig)
 			routes.POST("/chatwoot/:instanceId", r.chatwootHandler.SetConfig)

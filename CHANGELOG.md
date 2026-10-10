@@ -1,5 +1,18 @@
 # Evolution GO - Changelog
 
+## v0.16.36
+
+### Features
+- **Histórico de mensagens.** Nova tabela `message_history` (AutoMigrate): toda mensagem recebida, enviada pela API ou enviada pelo celular, por instância, com tipo, texto/legenda, URL da mídia no MinIO (quando `WEBHOOK_FILES` + MinIO estão ligados), mensagem citada e nome de arquivo. Edições e mensagens apagadas atualizam a linha original. Status de entrega das enviadas vem dos recibos e só avança: enviada → entregue → lida → ouvida.
+- **Busca** por texto com o full-text do próprio Postgres (`to_tsvector('portuguese')` + índice GIN, sem extensão) e `ILIKE` para trechos/números; filtros por conversa, tipo, enviadas/recebidas e período, paginação por `before`.
+- Endpoints (apikey da instância): `GET /instance/history/{id}?chat=&q=&type=&fromMe=&before=&after=&limit=`, `GET /instance/history/{id}/chats`, `GET /instance/history/{id}/message/{messageId}`.
+- Env: `MESSAGE_HISTORY=off` desliga a gravação (padrão ligado); `MESSAGE_HISTORY_RETENTION_DAYS` (padrão 90). Independente do antigo `DATABASE_SAVE_MESSAGES`.
+- Manager: card "Histórico de mensagens" com conversas, busca e ✓/✓✓ de entrega/leitura.
+
+### Fixes
+- **Reenvio a pedido do destinatário (retry receipt) depois de reiniciar.** O whatsmeow passa a guardar as mensagens enviadas no banco dele (`UseRetryMessageStore`) e, como reforço, o histórico guarda o proto das enviadas pela API por 7 dias (`GetMessageForRetry`). Antes, um pedido de reenvio que chegava depois de um restart ficava sem resposta e o destinatário via "Aguardando mensagem".
+- Apagar instância removia as mensagens antigas (`messages`) pelo campo errado (`source`, que é o JID do chat) e não apagava nada; agora usa `instance_id` (mantendo `source` por compatibilidade). Histórico novo também é apagado junto.
+
 ## v0.16.35
 
 ### Features

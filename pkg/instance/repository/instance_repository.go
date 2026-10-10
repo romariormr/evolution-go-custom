@@ -154,7 +154,7 @@ func (i *instanceRepository) Delete(instanceId string) error {
 		}
 
 		// Deleta todas as mensagens associadas à instância
-		if err := tx.Where("source = ?", instanceId).Delete(&message_model.Message{}).Error; err != nil {
+		if err := tx.Where("instance_id = ? OR source = ?", instanceId, instanceId).Delete(&message_model.Message{}).Error; err != nil {
 			return fmt.Errorf("erro ao deletar mensagens: %v", err)
 		}
 
@@ -162,7 +162,7 @@ func (i *instanceRepository) Delete(instanceId string) error {
 		// automáticas, campanhas). Tabelas criadas pelo AutoMigrate do main.
 		for _, table := range []string{
 			"webhook_deliveries", "scheduled_messages", "auto_reply_rules", "auto_reply_cooldowns",
-			"campaign_recipients", "campaigns", "campaign_optouts",
+			"campaign_recipients", "campaigns", "campaign_optouts", "message_history",
 		} {
 			if tx.Migrator().HasTable(table) {
 				if err := tx.Exec("DELETE FROM "+table+" WHERE instance_id = ?", instanceId).Error; err != nil {
