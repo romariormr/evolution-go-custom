@@ -158,6 +158,19 @@ func (i *instanceRepository) Delete(instanceId string) error {
 			return fmt.Errorf("erro ao deletar mensagens: %v", err)
 		}
 
+		// Dados das features por instância (webhook log, agendamentos, respostas
+		// automáticas, campanhas). Tabelas criadas pelo AutoMigrate do main.
+		for _, table := range []string{
+			"webhook_deliveries", "scheduled_messages", "auto_reply_rules", "auto_reply_cooldowns",
+			"campaign_recipients", "campaigns", "campaign_optouts",
+		} {
+			if tx.Migrator().HasTable(table) {
+				if err := tx.Exec("DELETE FROM "+table+" WHERE instance_id = ?", instanceId).Error; err != nil {
+					return fmt.Errorf("erro ao limpar %s: %v", table, err)
+				}
+			}
+		}
+
 		// Deleta a instância
 		if err := tx.Where("id = ?", instanceId).Delete(&instance_model.Instance{}).Error; err != nil {
 			return fmt.Errorf("erro ao deletar instância: %v", err)
