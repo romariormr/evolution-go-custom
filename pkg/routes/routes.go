@@ -8,6 +8,7 @@ import (
 	ginSwagger "github.com/swaggo/gin-swagger"
 
 	_ "github.com/EvolutionAPI/evolution-go/docs"
+	"github.com/EvolutionAPI/evolution-go/pkg/autoreply"
 	call_handler "github.com/EvolutionAPI/evolution-go/pkg/call/handler"
 	chat_handler "github.com/EvolutionAPI/evolution-go/pkg/chat/handler"
 	chatwoot_handler "github.com/EvolutionAPI/evolution-go/pkg/chatwoot/handler"
@@ -42,6 +43,13 @@ type Routes struct {
 	serverHandler           server_handler.ServerHandler
 	chatwootHandler         chatwoot_handler.ChatwootHandler
 	scheduleHandler         *schedule.Handler
+	autoReplyHandler        *autoreply.Handler
+}
+
+// WithAutoReply liga as rotas de respostas automáticas.
+func (r *Routes) WithAutoReply(h *autoreply.Handler) *Routes {
+	r.autoReplyHandler = h
+	return r
 }
 
 // WithSchedule liga as rotas de mensagens agendadas.
@@ -128,6 +136,12 @@ func (r *Routes) AssignRoutes(eng *gin.Engine) {
 				routes.DELETE("/schedule/:instanceId/:scheduleId", r.scheduleHandler.Delete)
 				routes.POST("/schedule/:instanceId/:scheduleId/pause", r.scheduleHandler.Pause)
 				routes.POST("/schedule/:instanceId/:scheduleId/resume", r.scheduleHandler.Resume)
+			}
+			if r.autoReplyHandler != nil {
+				routes.GET("/autoreply/:instanceId", r.autoReplyHandler.List)
+				routes.POST("/autoreply/:instanceId", r.autoReplyHandler.Create)
+				routes.PUT("/autoreply/:instanceId/:ruleId", r.autoReplyHandler.Update)
+				routes.DELETE("/autoreply/:instanceId/:ruleId", r.autoReplyHandler.Delete)
 			}
 			routes.GET("/chatwoot/:instanceId", r.chatwootHandler.GetConfig)
 			routes.POST("/chatwoot/:instanceId", r.chatwootHandler.SetConfig)
