@@ -8,6 +8,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import * as instancesApi from "@/services/api/instances";
 import type { Instance } from "@/types/instance";
+import { WebhookDeliveries } from "@/components/instances/WebhookDeliveries";
 
 const webhookSchema = z.object({
   webhookUrl: z.string().url("URL inválida").optional().or(z.literal("")),
@@ -640,6 +641,10 @@ export default function InstanceSettings() {
               </div>
             </div>
           </form>
+
+          {instance?.id && instance?.apikey && (
+            <WebhookDeliveries instanceId={instance.id} instanceToken={instance.apikey} />
+          )}
 
           {/* Chatwoot Settings Card */}
           <form onSubmit={handleSubmitChatwoot(onSubmitChatwoot)}>

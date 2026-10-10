@@ -2,16 +2,25 @@ package instance_handler
 
 import (
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
 	access_repository "github.com/EvolutionAPI/evolution-go/pkg/access/repository"
 	config "github.com/EvolutionAPI/evolution-go/pkg/config"
+	webhook_producer "github.com/EvolutionAPI/evolution-go/pkg/events/webhook"
 	instance_model "github.com/EvolutionAPI/evolution-go/pkg/instance/model"
 	instance_service "github.com/EvolutionAPI/evolution-go/pkg/instance/service"
 	"github.com/EvolutionAPI/evolution-go/pkg/utils"
 )
+
+// WebhookDeliveries é o que o handler precisa do log de entregas de webhook.
+type WebhookDeliveries interface {
+	ListDeliveries(instanceId, status string, limit int) ([]webhook_producer.WebhookDelivery, error)
+	ResendDelivery(instanceId, deliveryId string) (*webhook_producer.WebhookDelivery, error)
+	TestWebhooks(instanceId string, urls []string) []webhook_producer.TestResult
+}
 
 type InstanceHandler interface {
 	Create(ctx *gin.Context)
@@ -35,12 +44,16 @@ type InstanceHandler interface {
 	AddWebhook(ctx *gin.Context)
 	RemoveWebhook(ctx *gin.Context)
 	ListWebhooks(ctx *gin.Context)
+	ListWebhookDeliveries(ctx *gin.Context)
+	ResendWebhookDelivery(ctx *gin.Context)
+	TestWebhook(ctx *gin.Context)
 }
 
 type instanceHandler struct {
 	config           *config.Config
 	instanceService  instance_service.InstanceService
 	accessRepository access_repository.AccessRepository
+	deliveries       WebhookDeliveries
 }
 
 // authorizeGroupInstance restringe rotas AuthAdmin de escopo por instância: quando
@@ -845,6 +858,79 @@ func (h *instanceHandler) ListWebhooks(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"webhooks": webhooks})
 }
 
-func NewInstanceHandler(instanceService instance_service.InstanceService, config *config.Config, accessRepository access_repository.AccessRepository) InstanceHandler {
-	return &instanceHandler{instanceService: instanceService, config: config, accessRepository: accessRepository}
+// ListWebhookDeliveries lista o log de entregas de webhook da instância
+// (mais recentes primeiro). Filtro opcional ?status=failed|success|pending e ?limit=.
+func (h *instanceHandler) ListWebhookDeliveries(c *gin.Context) {
+	instanceId := c.Param("instanceId")
+	if !authorizeSameInstance(c, instanceId) {
+		return
+	}
+	if h.deliveries == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "log de entregas indisponível"})
+		return
+	}
+	limit, _ := strconv.Atoi(c.Query("limit"))
+	list, err := h.deliveries.ListDeliveries(instanceId, c.Query("status"), limit)
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"deliveries": list})
+}
+
+// ResendWebhookDelivery reenvia uma entrega que falhou (uma tentativa, síncrona).
+func (h *instanceHandler) ResendWebhookDelivery(c *gin.Context) {
+	instanceId := c.Param("instanceId")
+	if !authorizeSameInstance(c, instanceId) {
+		return
+	}
+	if h.deliveries == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "log de entregas indisponível"})
+		return
+	}
+	d, err := h.deliveries.ResendDelivery(instanceId, c.Param("deliveryId"))
+	if err != nil {
+		status := http.StatusBadRequest
+		if d == nil {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, gin.H{"error": err.Error(), "delivery": d})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"delivery": d})
+}
+
+// TestWebhook dispara um evento "WebhookTest" para os webhooks da instância e
+// devolve o resultado de cada um (código HTTP, latência, erro).
+func (h *instanceHandler) TestWebhook(c *gin.Context) {
+	instanceId := c.Param("instanceId")
+	if !authorizeSameInstance(c, instanceId) {
+		return
+	}
+	if h.deliveries == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "log de entregas indisponível"})
+		return
+	}
+	inst := c.MustGet("instance").(*instance_model.Instance)
+	urls := make([]string, 0, len(inst.Webhooks)+2)
+	if inst.Webhook != "" && inst.Webhook != "disabled" {
+		urls = append(urls, inst.Webhook)
+	}
+	for _, u := range inst.Webhooks {
+		if u != "" && u != inst.Webhook {
+			urls = append(urls, u)
+		}
+	}
+	if h.config != nil && h.config.WebhookUrl != "" {
+		urls = append(urls, h.config.WebhookUrl)
+	}
+	if len(urls) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "instância não tem webhook configurado"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"results": h.deliveries.TestWebhooks(instanceId, urls)})
+}
+
+func NewInstanceHandler(instanceService instance_service.InstanceService, config *config.Config, accessRepository access_repository.AccessRepository, deliveries WebhookDeliveries) InstanceHandler {
+	return &instanceHandler{instanceService: instanceService, config: config, accessRepository: accessRepository, deliveries: deliveries}
 }
