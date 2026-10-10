@@ -59,6 +59,11 @@ type ChatwootService interface {
 	// status. Mesmo no-op silencioso de NotifyQrCode quando não configurado.
 	NotifyConnected(instanceId string) error
 
+	// ConversationHasAgent diz se a conversa desse JID no Chatwoot está aberta e
+	// atribuída a um agente — usado pelo auto-reply pra não responder por cima de
+	// um atendimento humano. Sem Chatwoot/sem conversa = false.
+	ConversationHasAgent(instanceId, jid string) (bool, error)
+
 	// ResetStatusConversation esquece a conversa de status cacheada (QrConversationId)
 	// pra essa instância, sem mexer no resto da config. Próxima notificação cria
 	// uma conversa nova do zero. Usar quando a conversa cacheada ficou associada
@@ -411,6 +416,25 @@ func (s *chatwootService) NotifyConnected(instanceId string) error {
 // (ex.: "558597731198:64@s.whatsapp.net" -> "+558597731198"). Usa o mesmo
 // identifier (JID completo) que a integração Node/Baileys já usa nessa
 // mesma conta Chatwoot, pra ficar consistente.
+func (s *chatwootService) ConversationHasAgent(instanceId, jid string) (bool, error) {
+	cfg, err := s.repo.GetByInstanceId(instanceId)
+	if err != nil || cfg == nil || !cfg.Enabled || cfg.InboxId == "" {
+		return false, nil
+	}
+	mapping, err := s.contactMapRepo.GetByJid(instanceId, jid)
+	if err != nil || mapping == nil || mapping.ChatwootConversationId == "" || mapping.InboxId != cfg.InboxId {
+		return false, nil
+	}
+	assignee, status, err := s.client.ConversationAssignee(cfg.Url, cfg.AccountId, cfg.Token, mapping.ChatwootConversationId)
+	if err != nil {
+		if errors.Is(err, chatwoot_client.ErrNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	return assignee != 0 && status != "resolved", nil
+}
+
 func jidToPhone(jid string) string {
 	number := jid
 	if at := strings.Index(number, "@"); at != -1 {

@@ -28,6 +28,7 @@ import (
 	access_model "github.com/EvolutionAPI/evolution-go/pkg/access/model"
 	access_repository "github.com/EvolutionAPI/evolution-go/pkg/access/repository"
 	access_service "github.com/EvolutionAPI/evolution-go/pkg/access/service"
+	"github.com/EvolutionAPI/evolution-go/pkg/autoreply"
 	call_handler "github.com/EvolutionAPI/evolution-go/pkg/call/handler"
 	call_service "github.com/EvolutionAPI/evolution-go/pkg/call/service"
 	chat_handler "github.com/EvolutionAPI/evolution-go/pkg/chat/handler"
@@ -247,6 +248,9 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 	chatwootService.SetSender(chatwootMessageSenderAdapter{sendService: sendMessageService})
 	scheduleService := schedule.NewService(db, sendMessageService, instanceRepository, loggerWrapper)
 	scheduleService.Start()
+	autoReplyService := autoreply.NewService(db, sendMessageService, chatwootService, loggerWrapper)
+	autoReplyService.StartCleanup()
+	whatsmeow_service.RegisterIncomingMessageHook(autoReplyService.HandleIncoming)
 	userService := user_service.NewUserService(clientPointer, whatsmeowService, loggerWrapper)
 	messageService := message_service.NewMessageService(clientPointer, messageRepository, whatsmeowService, loggerWrapper)
 	chatService := chat_service.NewChatService(clientPointer, whatsmeowService, loggerWrapper, messageRepository)
@@ -317,7 +321,9 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 		pollHandler,
 		server_handler.NewServerHandler(),
 		chatwootHandler,
-	).WithSchedule(schedule.NewHandler(scheduleService)).AssignRoutes(r)
+	).WithSchedule(schedule.NewHandler(scheduleService)).
+		WithAutoReply(autoreply.NewHandler(autoReplyService)).
+		AssignRoutes(r)
 
 	// Webhook do Chatwoot (resposta do agente -> WhatsApp). O Chatwoot não manda
 	// apikey, então autenticamos por segredo compartilhado na URL/header:
@@ -429,6 +435,8 @@ func migrate(db *gorm.DB) {
 		&chatwoot_model.ChatwootContactMap{},
 		&webhook_producer.WebhookDelivery{},
 		&schedule.ScheduledMessage{},
+		&autoreply.Rule{},
+		&autoreply.Cooldown{},
 	)
 
 	if err != nil {

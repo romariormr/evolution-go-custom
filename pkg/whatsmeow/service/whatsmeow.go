@@ -64,6 +64,33 @@ type WhatsmeowService interface {
 	GetPollService() poll_service.PollService // NOVO: Acesso ao serviço de polls
 }
 
+// IncomingMessageHook recebe cada mensagem recebida (não fromMe) de uma
+// instância. Roda numa goroutine própria, então pode bloquear (ex.: auto-reply
+// esperando a fila anti-ban). text vem vazio para mídia sem legenda etc.
+type IncomingMessageHook func(instance *instance_model.Instance, info types.MessageInfo, text string)
+
+var (
+	incomingHooksMu sync.RWMutex
+	incomingHooks   []IncomingMessageHook
+)
+
+// RegisterIncomingMessageHook liga um consumidor de mensagens recebidas
+// (registrado no main, evita import cíclico com quem envia mensagens).
+func RegisterIncomingMessageHook(h IncomingMessageHook) {
+	incomingHooksMu.Lock()
+	incomingHooks = append(incomingHooks, h)
+	incomingHooksMu.Unlock()
+}
+
+func dispatchIncomingHooks(instance *instance_model.Instance, info types.MessageInfo, text string) {
+	incomingHooksMu.RLock()
+	hooks := incomingHooks
+	incomingHooksMu.RUnlock()
+	for _, h := range hooks {
+		go h(instance, info, text)
+	}
+}
+
 type clientVersion struct {
 	Major int
 	Minor int
@@ -1875,6 +1902,14 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 					}
 				}()
 			}
+		}
+
+		if !evt.Info.IsFromMe {
+			hookText := evt.Message.GetConversation()
+			if hookText == "" {
+				hookText = evt.Message.GetExtendedTextMessage().GetText()
+			}
+			dispatchIncomingHooks(mycli.Instance, evt.Info, hookText)
 		}
 
 		mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] ===== MESSAGE PROCESSING COMPLETED ===== ID: %s, From: %s, Type: %s, Webhook: %v", mycli.userID, evt.Info.ID, evt.Info.Chat.String(), evt.Info.Type, doWebhook)

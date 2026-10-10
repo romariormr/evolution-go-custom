@@ -1,5 +1,14 @@
 # Evolution GO - Changelog
 
+## v0.16.34
+
+### Features
+- **Respostas automáticas.** Regras por instância (tabelas `auto_reply_rules` e `auto_reply_cooldowns`, via AutoMigrate) com três gatilhos: `keyword` (contém / igual / começa com / regex RE2, sem diferenciar maiúsculas), `away` (fora do horário de atendimento: dias, início e fim, fuso; aceita janela que vira a meia-noite) e `welcome` (primeira mensagem do contato dentro do cooldown, padrão 24 h).
+- Cada mensagem dispara no máximo uma regra (menor `priority` que casar e estiver fora do cooldown daquele contato). Resposta aceita `{{name}}` (nome do contato) e sai pela fila anti-ban.
+- `skipIfAgent`: não responde se a conversa do contato no Chatwoot estiver aberta e atribuída a um agente.
+- Proteções: ignora grupos, status, canais, reações/edições e mensagens com mais de 2 min (backlog da sincronização ao reconectar); no máximo uma resposta automática a cada 30 s por contato (evita loop entre dois bots).
+- Endpoints (apikey da instância): `GET/POST /instance/autoreply/{id}`, `PUT/DELETE /instance/autoreply/{id}/{ruleId}`. Card "Respostas automáticas" no manager.
+
 ## v0.16.33
 
 ### Features

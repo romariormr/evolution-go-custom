@@ -98,6 +98,45 @@ func (c *Client) InboxExists(baseURL, accountId, token, inboxId string) (bool, e
 	}
 }
 
+// ConversationAssignee devolve o agente atribuído à conversa (0 = nenhum) e o
+// status dela (open/resolved/pending/snoozed).
+// Doc: GET /api/v1/accounts/{account_id}/conversations/{conversation_id}
+func (c *Client) ConversationAssignee(baseURL, accountId, token, conversationId string) (int, string, error) {
+	url := fmt.Sprintf("%s/api/v1/accounts/%s/conversations/%s", strings.TrimRight(baseURL, "/"), accountId, conversationId)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return 0, "", err
+	}
+	req.Header.Set("api_access_token", token)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return 0, "", err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode == http.StatusNotFound {
+		return 0, "", ErrNotFound
+	}
+	if resp.StatusCode != http.StatusOK {
+		return 0, "", fmt.Errorf("chatwoot retornou %d ao ler conversa %s", resp.StatusCode, conversationId)
+	}
+	var conv struct {
+		Status string `json:"status"`
+		Meta   struct {
+			Assignee *struct {
+				Id int `json:"id"`
+			} `json:"assignee"`
+		} `json:"meta"`
+	}
+	if err := json.Unmarshal(body, &conv); err != nil {
+		return 0, "", err
+	}
+	if conv.Meta.Assignee == nil {
+		return 0, conv.Status, nil
+	}
+	return conv.Meta.Assignee.Id, conv.Status, nil
+}
+
 // UpdateInboxWebhook aponta o webhook de uma inbox JÁ EXISTENTE de volta pro
 // Evolution GO. O webhook_url só é aplicado na criação da inbox, então uma inbox
 // antiga (ou recriada à mão no Chatwoot) ficaria sem o caminho de volta e a
