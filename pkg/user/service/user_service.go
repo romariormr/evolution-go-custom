@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/EvolutionAPI/evolution-go/pkg/safefetch"
 	"io"
-	"net/http"
 	"time"
 
 	instance_model "github.com/EvolutionAPI/evolution-go/pkg/instance/model"
@@ -499,7 +499,7 @@ func (u *userService) SetProfilePicture(data *SetProfilePictureStruct, instance 
 
 	var filedata []byte
 
-	resp, err := http.Get(data.Image)
+	resp, err := safefetch.Get(data.Image)
 	if err != nil {
 		return false, fmt.Errorf("failed to fetch image from URL: %v", err)
 	}

@@ -3,8 +3,8 @@ package chatwoot_service
 import (
 	"errors"
 	"fmt"
+	"github.com/EvolutionAPI/evolution-go/pkg/safefetch"
 	"io"
-	"net/http"
 	"path"
 	"strings"
 	"sync"
@@ -834,9 +834,7 @@ func (s *chatwootService) HandleAgentReply(instanceId, chatwootConversationId st
 // data_url é pública, sem precisar de api_access_token) e traduz o file_type
 // do Chatwoot pro "Type" que o send_service espera.
 func downloadChatwootAttachment(attachment AgentReplyAttachment) (data []byte, mediaType, filename string, err error) {
-	client := &http.Client{Timeout: 30 * time.Second}
-
-	resp, err := client.Get(attachment.DataUrl)
+	resp, err := safefetch.Get(attachment.DataUrl)
 	if err != nil {
 		return nil, "", "", err
 	}
