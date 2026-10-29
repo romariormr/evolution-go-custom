@@ -12,6 +12,9 @@ type CommunityHandler interface {
 	CreateCommunity(ctx *gin.Context)
 	CommunityAdd(ctx *gin.Context)
 	CommunityRemove(ctx *gin.Context)
+	ListCommunities(ctx *gin.Context)
+	CommunityInfo(ctx *gin.Context)
+	CommunityParticipants(ctx *gin.Context)
 }
 
 type communityHandler struct {
@@ -149,6 +152,104 @@ func (c *communityHandler) CommunityRemove(ctx *gin.Context) {
 	}
 
 	ctx.JSON(http.StatusOK, gin.H{"message": "success", "data": resp})
+}
+
+func instanceFrom(ctx *gin.Context) (*instance_model.Instance, bool) {
+	instance, ok := ctx.MustGet("instance").(*instance_model.Instance)
+	if !ok {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "instance not found"})
+	}
+	return instance, ok
+}
+
+// List communities
+// @Summary List communities
+// @Description Lista as comunidades das quais a instância participa (nome, descrição, participantes, se é admin)
+// @Tags Community
+// @Produce json
+// @Success 200 {object} gin.H "success"
+// @Failure 500 {object} gin.H "Internal server error"
+// @Router /community/list [get]
+func (c *communityHandler) ListCommunities(ctx *gin.Context) {
+	instance, ok := instanceFrom(ctx)
+	if !ok {
+		return
+	}
+	list, err := c.communityService.ListCommunities(instance)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"message": "success", "data": list})
+}
+
+func (c *communityHandler) bindJID(ctx *gin.Context) (*community_service.CommunityJIDStruct, bool) {
+	var data community_service.CommunityJIDStruct
+	if err := ctx.ShouldBindBodyWithJSON(&data); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return nil, false
+	}
+	if data.CommunityJID == "" {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "communityJid é obrigatório"})
+		return nil, false
+	}
+	return &data, true
+}
+
+// Community info
+// @Summary Community info
+// @Description Detalhes da comunidade com os grupos vinculados e o grupo de avisos (announcementJid)
+// @Tags Community
+// @Accept json
+// @Produce json
+// @Param message body community_service.CommunityJIDStruct true "Community JID"
+// @Success 200 {object} gin.H "success"
+// @Failure 400 {object} gin.H "Error on validation"
+// @Failure 500 {object} gin.H "Internal server error"
+// @Router /community/info [post]
+func (c *communityHandler) CommunityInfo(ctx *gin.Context) {
+	instance, ok := instanceFrom(ctx)
+	if !ok {
+		return
+	}
+	data, ok := c.bindJID(ctx)
+	if !ok {
+		return
+	}
+	info, err := c.communityService.CommunityInfo(data, instance)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"message": "success", "data": info})
+}
+
+// Community participants
+// @Summary Community participants
+// @Description Participantes de todos os grupos da comunidade
+// @Tags Community
+// @Accept json
+// @Produce json
+// @Param message body community_service.CommunityJIDStruct true "Community JID"
+// @Success 200 {object} gin.H "success"
+// @Failure 400 {object} gin.H "Error on validation"
+// @Failure 500 {object} gin.H "Internal server error"
+// @Router /community/participants [post]
+func (c *communityHandler) CommunityParticipants(ctx *gin.Context) {
+	instance, ok := instanceFrom(ctx)
+	if !ok {
+		return
+	}
+	data, ok := c.bindJID(ctx)
+	if !ok {
+		return
+	}
+	list, err := c.communityService.CommunityParticipants(data, instance)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"message": "success", "data": list, "count": len(list)})
 }
 
 func NewCommunityHandler(
