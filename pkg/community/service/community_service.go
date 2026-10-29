@@ -18,6 +18,9 @@ type CommunityService interface {
 	CreateCommunity(data *CreateCommunityStruct, instance *instance_model.Instance) (*types.GroupInfo, error)
 	CommunityAdd(data *AddParticipantStruct, instance *instance_model.Instance) (gin.H, error)
 	CommunityRemove(data *AddParticipantStruct, instance *instance_model.Instance) (gin.H, error)
+	ListCommunities(instance *instance_model.Instance) ([]CommunitySummary, error)
+	CommunityInfo(data *CommunityJIDStruct, instance *instance_model.Instance) (*CommunityDetail, error)
+	CommunityParticipants(data *CommunityJIDStruct, instance *instance_model.Instance) ([]string, error)
 }
 
 type communityService struct {
@@ -115,8 +118,9 @@ func (c *communityService) CommunityAdd(data *AddParticipantStruct, instance *in
 		if err != nil {
 			c.loggerWrapper.GetLogger(instance.Id).LogError("[%s] error link group: %v", instance.Id, err)
 			failedList = append(failedList, groupJID.String())
+			continue
 		}
-		successList = append(failedList, groupJID.String())
+		successList = append(successList, groupJID.String())
 	}
 
 	return gin.H{
@@ -144,10 +148,11 @@ func (c *communityService) CommunityRemove(data *AddParticipantStruct, instance 
 		groupJID, _ := utils.ParseJID(participant)
 		err := client.UnlinkGroup(context.Background(), communityJID, groupJID)
 		if err != nil {
-			c.loggerWrapper.GetLogger(instance.Id).LogError("[%s] error link group: %v", instance.Id, err)
+			c.loggerWrapper.GetLogger(instance.Id).LogError("[%s] error unlink group: %v", instance.Id, err)
 			failedList = append(failedList, groupJID.String())
+			continue
 		}
-		successList = append(failedList, groupJID.String())
+		successList = append(successList, groupJID.String())
 	}
 
 	return gin.H{

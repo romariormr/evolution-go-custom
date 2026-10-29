@@ -1,5 +1,17 @@
 # Evolution GO - Changelog
 
+## v0.16.39
+
+### Features
+- **Comunidades: consulta.** Antes só dava para criar e vincular/desvincular grupos.
+  - `GET /community/list`: comunidades das quais a instância participa (JID, nome, descrição, participantes, data de criação e se a instância é admin).
+  - `POST /community/info` `{communityJid}`: detalhes da comunidade com os grupos vinculados e o **grupo de avisos** (`announcementJid`) — para mandar aviso, use os `/send/*` normais com esse JID.
+  - `POST /community/participants` `{communityJid}`: participantes de todos os grupos da comunidade.
+  - `communityJid` aceita só o número (vira `@g.us`).
+
+### Fixes
+- `/community/add` e `/community/remove` devolviam listas erradas: um grupo que falhava aparecia em `success` também, e `success` recebia o conteúdo de `failed`. Agora cada grupo cai só na lista certa.
+
 ## v0.16.38
 
 ### Segurança

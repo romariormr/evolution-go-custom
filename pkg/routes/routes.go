@@ -284,6 +284,9 @@ func (r *Routes) AssignRoutes(eng *gin.Engine) {
 		routes.Use(r.authMiddleware.Auth)
 		{
 			routes.POST("/create", r.communityHandler.CreateCommunity)
+			routes.GET("/list", r.communityHandler.ListCommunities)
+			routes.POST("/info", r.communityHandler.CommunityInfo)
+			routes.POST("/participants", r.communityHandler.CommunityParticipants)
 			routes.POST("/add", r.jidValidationMiddleware.ValidateJIDFields("number", "communityId"), r.communityHandler.CommunityAdd)
 			routes.POST("/remove", r.jidValidationMiddleware.ValidateJIDFields("number", "communityId"), r.communityHandler.CommunityRemove)
 		}
