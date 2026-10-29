@@ -153,6 +153,8 @@ func describe(m *waE2E.Message) (msgType, content, mime, fileName, quoted string
 		return "protocol", "", "", "", ""
 	case m.PollUpdateMessage != nil:
 		return "poll_vote", "", "", "", ""
+	case m.AlbumMessage != nil:
+		return "album", "", "", "", ""
 	}
 	return "other", "", "", "", ""
 }

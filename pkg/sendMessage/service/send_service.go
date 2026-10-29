@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/EvolutionAPI/evolution-go/pkg/safefetch"
 	"image"
 	"image/jpeg"
 	"image/png"
@@ -28,7 +29,6 @@ import (
 	"github.com/gabriel-vasile/mimetype"
 	"github.com/vincent-petithory/dataurl"
 	"go.mau.fi/whatsmeow"
-	waBinary "go.mau.fi/whatsmeow/binary"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
 	xdraw "golang.org/x/image/draw"
@@ -48,6 +48,7 @@ type SendService interface {
 	SendButton(data *ButtonStruct, instance *instance_model.Instance) (*MessageSendStruct, error)
 	SendList(data *ListStruct, instance *instance_model.Instance) (*MessageSendStruct, error)
 	SendCarousel(data *CarouselStruct, instance *instance_model.Instance) (*MessageSendStruct, error)
+	SendAlbum(data *AlbumStruct, instance *instance_model.Instance) (*AlbumSendResult, error)
 	SendStatusText(data *StatusTextStruct, instance *instance_model.Instance) (*MessageSendStruct, error)
 	SendStatusMediaUrl(data *StatusMediaStruct, instance *instance_model.Instance) (*MessageSendStruct, error)
 	SendStatusMediaFile(data *StatusMediaStruct, fileData []byte, instance *instance_model.Instance) (*MessageSendStruct, error)
@@ -305,6 +306,9 @@ type ListStruct struct {
 	FormatJid *bool `json:"formatJid,omitempty"`
 	// Quoted (reply-to) context.
 	Quoted QuotedStruct `json:"quoted,omitempty"`
+	// NativeFlow: envia como lista "native flow" (gaveta single_select dos
+	// clientes atuais) em vez do ListMessage antigo.
+	NativeFlow bool `json:"nativeFlow,omitempty"`
 }
 
 // CarouselButtonStruct is a button attached to a single carousel card.
@@ -683,7 +687,7 @@ func (s *sendService) sendTextWithRetry(data *TextStruct, instance *instance_mod
 }
 
 func fetchLinkMetadata(url string) (string, string, string, error) {
-	resp, err := http.Get(url)
+	resp, err := safefetch.Get(url)
 	if err != nil {
 		return "", "", "", err
 	}
@@ -1378,11 +1382,14 @@ func (s *sendService) sendMediaUrlWithRetry(data *MediaStruct, instance *instanc
 
 		s.loggerWrapper.GetLogger(instance.Id).LogInfo("[%s] Iniciando download da URL: %s", instance.Id, data.Url)
 
-		resp, err := http.Get(data.Url)
+		resp, err := safefetch.Get(data.Url)
 		if err != nil {
 			return nil, err
 		}
 		defer resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode > 299 {
+			return nil, fmt.Errorf("download da mídia falhou: HTTP %d", resp.StatusCode)
+		}
 
 		s.loggerWrapper.GetLogger(instance.Id).LogInfo("[%s] Download concluído em %v. Lendo dados...", instance.Id, time.Since(startTime))
 
@@ -1727,7 +1734,7 @@ func convertToWebP(imageData string) ([]byte, error) {
 	var img image.Image
 	var err error
 
-	resp, err := http.Get(imageData)
+	resp, err := safefetch.Get(imageData)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch image from URL: %v", err)
 	}
@@ -1884,7 +1891,7 @@ func mapKeyType(keyType string) string {
 // converte binário em data URI, então isto cobre URL / data URI / binário.
 func fetchImageBytes(image string) ([]byte, error) {
 	if strings.HasPrefix(image, "http://") || strings.HasPrefix(image, "https://") {
-		resp, err := http.Get(image)
+		resp, err := safefetch.Get(image)
 		if err != nil {
 			return nil, fmt.Errorf("failed to fetch image from URL: %v", err)
 		}
@@ -2230,17 +2237,7 @@ func (s *sendService) SendButton(data *ButtonStruct, instance *instance_model.In
 		}
 	}
 
-	bizNodes := []waBinary.Node{{
-		Tag: "biz",
-		Content: []waBinary.Node{{
-			Tag:   "interactive",
-			Attrs: waBinary.Attrs{"type": "native_flow", "v": "1"},
-			Content: []waBinary.Node{{
-				Tag:   "native_flow",
-				Attrs: waBinary.Attrs{"v": "9", "name": "mixed"},
-			}},
-		}},
-	}}
+	bizNodes := nativeFlowNodes(recipient, "mixed")
 	s.throttle(instance, client, recipient, 0)
 	response, err := client.SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{
 		ID:              messageId,
@@ -2367,6 +2364,19 @@ func (s *sendService) SendList(data *ListStruct, instance *instance_model.Instan
 	buttonText := data.ButtonText
 	if buttonText == "" {
 		buttonText = "Ver Menu"
+	}
+
+	if data.NativeFlow {
+		msg, err := nativeFlowList(data, buttonText)
+		if err != nil {
+			return nil, err
+		}
+		return s.SendMessage(instance, msg, "InteractiveMessage", &SendDataStruct{
+			Number:    data.Number,
+			Delay:     data.Delay,
+			FormatJid: data.FormatJid,
+			Quoted:    data.Quoted,
+		})
 	}
 
 	// Build sections in legacy ListMessage format
@@ -2743,17 +2753,7 @@ func (s *sendService) SendMessage(instance *instance_model.Instance, msg *waE2E.
 
 	// InteractiveMessage (carousel, list com NativeFlow) requer biz node para WhatsApp não retornar erro 463
 	if messageType == "InteractiveMessage" {
-		bizNodes := []waBinary.Node{{
-			Tag: "biz",
-			Content: []waBinary.Node{{
-				Tag:   "interactive",
-				Attrs: waBinary.Attrs{"type": "native_flow", "v": "1"},
-				Content: []waBinary.Node{{
-					Tag:   "native_flow",
-					Attrs: waBinary.Attrs{"v": "9", "name": "mixed"},
-				}},
-			}},
-		}}
+		bizNodes := nativeFlowNodes(recipient, "mixed")
 		sendExtra.AdditionalNodes = &bizNodes
 	}
 
@@ -2940,7 +2940,7 @@ func (s *sendService) SendCarousel(data *CarouselStruct, instance *instance_mode
 
 			if card.Header.ImageUrl != "" {
 				// Download image
-				resp, err := http.Get(card.Header.ImageUrl)
+				resp, err := safefetch.Get(card.Header.ImageUrl)
 				if err == nil {
 					defer resp.Body.Close()
 					fileData, err := io.ReadAll(resp.Body)
@@ -2965,7 +2965,7 @@ func (s *sendService) SendCarousel(data *CarouselStruct, instance *instance_mode
 				}
 			} else if card.Header.VideoUrl != "" {
 				// Download and upload video
-				resp, err := http.Get(card.Header.VideoUrl)
+				resp, err := safefetch.Get(card.Header.VideoUrl)
 				if err == nil {
 					defer resp.Body.Close()
 					fileData, err := io.ReadAll(resp.Body)
@@ -3196,11 +3196,11 @@ func (s *sendService) SendStatusMediaUrl(data *StatusMediaStruct, instance *inst
 		}
 		req.Header.Set("User-Agent", "Evolution-GO/1.0")
 
-		httpClient := &http.Client{}
-		resp, err := httpClient.Do(req)
+		resp, err := safefetch.Client().Do(req)
 		if err != nil {
 			return nil, fmt.Errorf("failed to download file from URL: %v", err)
 		}
+		safefetch.LimitBody(resp)
 		defer resp.Body.Close()
 
 		if resp.StatusCode < 200 || resp.StatusCode > 299 {

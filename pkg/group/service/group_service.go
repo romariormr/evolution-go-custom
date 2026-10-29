@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/EvolutionAPI/evolution-go/pkg/safefetch"
 	"io"
-	"net/http"
 	"strings"
 	"time"
 
@@ -49,9 +49,9 @@ type GroupService interface {
 }
 
 type groupService struct {
-	clientPointer    map[string]*whatsmeow.Client
-	whatsmeowService whatsmeow_service.WhatsmeowService
-	loggerWrapper    *logger_wrapper.LoggerManager
+	clientPointer     map[string]*whatsmeow.Client
+	whatsmeowService  whatsmeow_service.WhatsmeowService
+	loggerWrapper     *logger_wrapper.LoggerManager
 	messageRepository message_repository.MessageRepository
 }
 
@@ -128,7 +128,6 @@ type UpdateGroupRequestParticipantsStruct struct {
 	Action       string   `json:"action"` // approve, reject
 	Participants []string `json:"participants"`
 }
-
 
 func (g *groupService) ensureClientConnected(instanceId string) (*whatsmeow.Client, error) {
 	client := g.clientPointer[instanceId]
@@ -266,7 +265,7 @@ func (g *groupService) SetGroupPhoto(data *SetGroupPhotoStruct, instance *instan
 	var fileData []byte
 
 	if strings.HasPrefix(data.Image, "http://") || strings.HasPrefix(data.Image, "https://") {
-		resp, err := http.Get(data.Image)
+		resp, err := safefetch.Get(data.Image)
 		if err != nil {
 			g.loggerWrapper.GetLogger(instance.Id).LogError("[%s] Could not download image from URL", instance.Id)
 			return "", fmt.Errorf("failed to fetch image from URL: %v", err)
@@ -677,9 +676,9 @@ func NewGroupService(
 	messageRepository message_repository.MessageRepository,
 ) GroupService {
 	return &groupService{
-		clientPointer:    clientPointer,
-		whatsmeowService: whatsmeowService,
-		loggerWrapper:    loggerWrapper,
+		clientPointer:     clientPointer,
+		whatsmeowService:  whatsmeowService,
+		loggerWrapper:     loggerWrapper,
 		messageRepository: messageRepository,
 	}
 }

@@ -1,5 +1,18 @@
 # Evolution GO - Changelog
 
+## v0.16.38
+
+### Segurança
+- **Proteção contra SSRF nos downloads por URL** (novo pacote `pkg/safefetch`). Mídia por URL, foto de grupo/perfil, prévia de link, cards do carrossel, status com mídia e anexos do Chatwoot passam a ser baixados por um cliente que só aceita http/https e **sempre bloqueia** loopback, link-local (inclui o endereço de metadados de nuvem 169.254.169.254), 0.0.0.0 e multicast. O IP é conferido na hora de conectar, inclusive depois de redirecionamentos (sem brecha de troca de DNS).
+- Redes privadas (10/8, 172.16/12, 192.168/16, 100.64/10) continuam liberadas por padrão — fluxos internos (n8n, MinIO) mandam mídia por URL interna — e cada acesso é registrado no log (`[SAFEFETCH]`). Para bloquear: `MEDIA_FETCH_BLOCK_PRIVATE=true` + exceções em `MEDIA_FETCH_ALLOWED_HOSTS` (host, host:porta ou CIDR).
+- Downloads agora têm timeout (`MEDIA_FETCH_TIMEOUT_SEC`, padrão 120) e tamanho máximo (`MEDIA_FETCH_MAX_MB`, padrão 100); antes um link podia prender a requisição ou estourar a memória. Mídia por URL com HTTP de erro (404 etc.) falha com mensagem clara em vez de enviar a página de erro como arquivo.
+
+### Features
+- **Envio de álbum** — `POST /send/album`: de 2 a 30 imagens/vídeos (URL ou data URI) agrupados numa única bolha, com legenda por item. Todas as mídias são baixadas e enviadas ao WhatsApp antes de a mensagem sair (uma URL quebrada não deixa álbum pela metade).
+- **Lista "native flow"** — `nativeFlow: true` em `/send/list` envia a lista como gaveta `single_select` (formato dos clientes atuais) em vez do `ListMessage` antigo.
+- **Botões/listas/carrossel com os nós completos do WhatsApp Business**: `<biz>` com `actual_actors`/`host_storage`/`privacy_mode_ts` e `<quality_control>`, mais `<bot biz_bot="1">` em conversa 1:1 (mesmo formato do WA-AKG v1.7 e dos clientes oficiais), para renderizar melhor no iOS e no WhatsApp Web. `INTERACTIVE_NODES=legacy` volta ao formato anterior.
+- Histórico registra a âncora do álbum como tipo `album`.
+
 ## v0.16.37
 
 ### Features
