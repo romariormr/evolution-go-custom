@@ -24,9 +24,9 @@ type UserService interface {
 	GetContacts(instance *instance_model.Instance) ([]ContactInfo, error)
 	GetPrivacy(instance *instance_model.Instance) (types.PrivacySettings, error)
 	SetPrivacy(data *PrivacyStruct, instance *instance_model.Instance) (*types.PrivacySettings, error)
-	BlockContact(data *BlockStruct, instance *instance_model.Instance) (*types.Blocklist, error)
-	UnlockContact(data *BlockStruct, instance *instance_model.Instance) (*types.Blocklist, error)
-	GetBlockList(instance *instance_model.Instance) (*types.Blocklist, error)
+	BlockContact(data *BlockStruct, instance *instance_model.Instance) (*BlocklistResponse, error)
+	UnlockContact(data *BlockStruct, instance *instance_model.Instance) (*BlocklistResponse, error)
+	GetBlockList(instance *instance_model.Instance) (*BlocklistResponse, error)
 	SetProfilePicture(data *SetProfilePictureStruct, instance *instance_model.Instance) (bool, error)
 	RemoveProfilePicture(instance *instance_model.Instance) (bool, error)
 	SetProfileName(data *SetProfileNameStruct, instance *instance_model.Instance) (bool, error)
@@ -439,7 +439,7 @@ func (u *userService) SetPrivacy(data *PrivacyStruct, instance *instance_model.I
 	return &privacy, nil
 }
 
-func (u *userService) BlockContact(data *BlockStruct, instance *instance_model.Instance) (*types.Blocklist, error) {
+func (u *userService) BlockContact(data *BlockStruct, instance *instance_model.Instance) (*BlocklistResponse, error) {
 	client, err := u.ensureClientConnected(instance.Id)
 	if err != nil {
 		return nil, err
@@ -450,15 +450,15 @@ func (u *userService) BlockContact(data *BlockStruct, instance *instance_model.I
 		return nil, errors.New("invalid phone number")
 	}
 
-	resp, err := client.UpdateBlocklist(context.Background(), jid, events.BlocklistChangeActionBlock)
+	resp, err := client.UpdateBlocklist(context.Background(), jid, events.BlocklistChangeActionBlock, "")
 	if err != nil {
 		return nil, err
 	}
 
-	return resp, nil
+	return toBlocklistResponse(resp), nil
 }
 
-func (u *userService) UnlockContact(data *BlockStruct, instance *instance_model.Instance) (*types.Blocklist, error) {
+func (u *userService) UnlockContact(data *BlockStruct, instance *instance_model.Instance) (*BlocklistResponse, error) {
 	client, err := u.ensureClientConnected(instance.Id)
 	if err != nil {
 		return nil, err
@@ -469,26 +469,26 @@ func (u *userService) UnlockContact(data *BlockStruct, instance *instance_model.
 		return nil, errors.New("invalid phone number")
 	}
 
-	resp, err := client.UpdateBlocklist(context.Background(), jid, events.BlocklistChangeActionUnblock)
+	resp, err := client.UpdateBlocklist(context.Background(), jid, events.BlocklistChangeActionUnblock, "")
 	if err != nil {
 		return nil, err
 	}
 
-	return resp, nil
+	return toBlocklistResponse(resp), nil
 }
 
-func (u *userService) GetBlockList(instance *instance_model.Instance) (*types.Blocklist, error) {
+func (u *userService) GetBlockList(instance *instance_model.Instance) (*BlocklistResponse, error) {
 	client, err := u.ensureClientConnected(instance.Id)
 	if err != nil {
 		return nil, err
 	}
 
-	resp, err := client.GetBlocklist(context.Background())
+	resp, err := client.GetBlocklist(context.Background(), "")
 	if err != nil {
 		return nil, err
 	}
 
-	return resp, nil
+	return toBlocklistResponse(resp), nil
 }
 
 func (u *userService) SetProfilePicture(data *SetProfilePictureStruct, instance *instance_model.Instance) (bool, error) {

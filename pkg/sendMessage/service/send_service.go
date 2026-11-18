@@ -2743,7 +2743,9 @@ func (s *sendService) SendMessage(instance *instance_model.Instance, msg *waE2E.
 	s.loggerWrapper.GetLogger(instance.Id).LogInfo("[%s] Sending message to %s with ID %s", instance.Id, recipient.String(), message)
 
 	// Preparar extra parameters para o envio
-	sendExtra := whatsmeow.SendRequestExtra{ID: message}
+	// CheckPermissions: em grupo só-admins onde a instância não é admin, recusa
+	// antes de enviar (ErrNoPermissionInGroup) em vez de o WhatsApp descartar.
+	sendExtra := whatsmeow.SendRequestExtra{ID: message, CheckPermissions: true}
 
 	// Para newsletters/canais, adicionar o MediaHandle se houver mídia
 	if recipient.Server == "newsletter" && data.MediaHandle != "" {
@@ -2764,6 +2766,12 @@ func (s *sendService) SendMessage(instance *instance_model.Instance, msg *waE2E.
 	response, err := s.clientPointer[instance.Id].SendMessage(context.Background(), recipient, msg, sendExtra)
 	if err != nil {
 		s.loggerWrapper.GetLogger(instance.Id).LogError("[%s] Error sending message: %v", instance.Id, err)
+		switch {
+		case errors.Is(err, whatsmeow.ErrRecipientNotOnWhatsApp):
+			return nil, fmt.Errorf("o número %s não tem WhatsApp: %w", recipient.User, err)
+		case errors.Is(err, whatsmeow.ErrNoPermissionInGroup):
+			return nil, fmt.Errorf("só administradores podem enviar nesse grupo e a instância não é admin: %w", err)
+		}
 		return nil, err
 	}
 

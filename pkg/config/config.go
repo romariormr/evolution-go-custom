@@ -10,6 +10,9 @@ import (
 	"time"
 
 	"github.com/gomessguii/logger"
+	// Driver "postgres" do database/sql registrado aqui, junto de quem abre
+	// as conexões, e não por acaso num import de outro pacote.
+	_ "github.com/lib/pq"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 
@@ -182,13 +185,32 @@ func (c *Config) CreateUsersDB() (*gorm.DB, error) {
 		return nil, fmt.Errorf("erro ao obter sql.DB do GORM: %v", err)
 	}
 
-	// Configurar pool de conexões para evitar conexões ociosas não fechadas
-	sqlDB.SetMaxOpenConns(25)                 // Máximo de 25 conexões abertas simultaneamente
-	sqlDB.SetMaxIdleConns(5)                  // Máximo de 5 conexões ociosas no pool
-	sqlDB.SetConnMaxLifetime(5 * time.Minute) // Reconectar após 5 minutos para evitar timeouts
-	sqlDB.SetConnMaxIdleTime(1 * time.Minute) // Fechar conexões ociosas após 1 minuto
+	c.ApplyPool(sqlDB, "USERS")
 
 	return db, nil
+}
+
+// ApplyPool limita o pool de conexões de um banco. kind = "USERS" ou "AUTH":
+// POSTGRES_<kind>_MAX_OPEN (padrão 25) e POSTGRES_<kind>_MAX_IDLE (padrão 5).
+// Com os dois bancos no mesmo servidor, o total que o evo-go pode abrir é a
+// soma dos dois MAX_OPEN — útil para combinar com o DBA o CONNECTION LIMIT.
+func (c *Config) ApplyPool(db *sql.DB, kind string) {
+	maxOpen := envInt("POSTGRES_"+kind+"_MAX_OPEN", 25)
+	maxIdle := envInt("POSTGRES_"+kind+"_MAX_IDLE", 5)
+	if maxIdle > maxOpen {
+		maxIdle = maxOpen
+	}
+	db.SetMaxOpenConns(maxOpen)
+	db.SetMaxIdleConns(maxIdle)
+	db.SetConnMaxLifetime(5 * time.Minute)
+	db.SetConnMaxIdleTime(1 * time.Minute)
+}
+
+func envInt(key string, def int) int {
+	if v, err := strconv.Atoi(strings.TrimSpace(os.Getenv(key))); err == nil && v > 0 {
+		return v
+	}
+	return def
 }
 
 func (c *Config) CreateAuthDB() (*sql.DB, error) {
