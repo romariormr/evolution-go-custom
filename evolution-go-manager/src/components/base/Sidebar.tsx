@@ -3,6 +3,7 @@ import {
   LayoutDashboard,
   Smartphone,
   ShieldCheck,
+  UserCog,
 } from 'lucide-react';
 import { cn } from '@/utils/cn';
 import useAuth from '@/hooks/useAuth';
@@ -17,9 +18,11 @@ function Sidebar() {
   const currentYear = new Date().getFullYear();
   const { user } = useAuth();
   const { branding } = useBrandingStore();
-  const items = user?.role === 'admin'
-    ? [...navItems, { to: '/manager/admin', label: 'Administração', icon: ShieldCheck }]
-    : navItems;
+  const items = [
+    ...navItems,
+    ...(user ? [{ to: '/manager/account', label: 'Minha conta', icon: UserCog }] : []),
+    ...(user?.role === 'admin' ? [{ to: '/manager/admin', label: 'Administração', icon: ShieldCheck }] : []),
+  ];
 
   return (
     <div className="hidden md:flex bg-sidebar text-sidebar-foreground flex-col w-56 border-r border-sidebar-border">

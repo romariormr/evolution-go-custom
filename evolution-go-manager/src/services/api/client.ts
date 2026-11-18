@@ -64,7 +64,7 @@ apiClient.interceptors.response.use(
     // JWT). Um 401 de rota legada (ex.: /instance/limits, admin-only, chamada por
     // engano com token de instância) não deve invalidar a sessão inteira do usuário.
     const requestUrl = error.config?.url || '';
-    const isSessionRoute = requestUrl.includes('/access/') && !requestUrl.endsWith('/access/login');
+    const isSessionRoute = requestUrl.includes('/access/') && !requestUrl.includes('/access/login');
     if (error.response?.status === 401 && isSessionRoute) {
       console.error('Unauthorized - clearing auth data');
       localStorage.removeItem('evolution-auth');

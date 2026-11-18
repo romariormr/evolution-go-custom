@@ -21,6 +21,7 @@ const (
 	settingLdapGroupAttr    = "ldap.group_attribute" // ex: memberOf
 	settingLdapStartTLS     = "ldap.start_tls"       // "true" para ldap:// + StartTLS
 	settingLdapSkipVerify   = "ldap.skip_verify_tls" // "true" para aceitar cert self-signed/wildcard
+	settingLdapAdminGroupDN = "ldap.admin_group_dn"  // membros desse grupo do AD viram admin (vazio = papel manual)
 )
 
 var ErrLdapDisabled = errors.New("LDAP não está habilitado")
@@ -53,7 +54,10 @@ func loadLdapConfig(repo access_repository.AccessRepository) (LdapConfig, error)
 	cfg.Enabled = settings[settingLdapEnabled] == "true"
 	cfg.URL = settings[settingLdapURL]
 	cfg.BindDN = settings[settingLdapBindDN]
-	cfg.BindPassword = settings[settingLdapBindPassword]
+	cfg.BindPassword, err = decryptSecret(globalKeyForSecrets, settings[settingLdapBindPassword])
+	if err != nil {
+		return LdapConfig{}, err
+	}
 	cfg.BaseDN = settings[settingLdapBaseDN]
 	cfg.StartTLS = settings[settingLdapStartTLS] == "true"
 	cfg.SkipVerify = settings[settingLdapSkipVerify] == "true"
@@ -95,24 +99,24 @@ func dialLdap(cfg LdapConfig) (*ldap.Conn, error) {
 }
 
 // searchUser faz bind com a conta de serviço e busca o DN + grupos do usuário.
-func searchUser(cfg LdapConfig, conn *ldap.Conn, username string) (dn string, groupDNs []string, displayName string, err error) {
+func searchUser(cfg LdapConfig, conn *ldap.Conn, username string) (dn string, groupDNs []string, displayName, email string, err error) {
 	if err = conn.Bind(cfg.BindDN, cfg.BindPassword); err != nil {
-		return "", nil, "", fmt.Errorf("bind da conta de serviço falhou: %w", err)
+		return "", nil, "", "", fmt.Errorf("bind da conta de serviço falhou: %w", err)
 	}
 	filter := fmt.Sprintf(cfg.UserFilter, ldap.EscapeFilter(username))
 	req := ldap.NewSearchRequest(
 		cfg.BaseDN,
 		ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 0, 0, false,
 		filter,
-		[]string{"dn", cfg.GroupAttr, "displayName", "cn"},
+		[]string{"dn", cfg.GroupAttr, "displayName", "cn", "mail"},
 		nil,
 	)
 	result, err := conn.Search(req)
 	if err != nil {
-		return "", nil, "", fmt.Errorf("busca LDAP falhou: %w", err)
+		return "", nil, "", "", fmt.Errorf("busca LDAP falhou: %w", err)
 	}
 	if len(result.Entries) == 0 {
-		return "", nil, "", errors.New("usuário não encontrado no LDAP")
+		return "", nil, "", "", errors.New("usuário não encontrado no LDAP")
 	}
 	entry := result.Entries[0]
 	dn = entry.DN
@@ -121,45 +125,81 @@ func searchUser(cfg LdapConfig, conn *ldap.Conn, username string) (dn string, gr
 	if displayName == "" {
 		displayName = entry.GetAttributeValue("cn")
 	}
-	return dn, groupDNs, displayName, nil
+	email = entry.GetAttributeValue("mail")
+	return dn, groupDNs, displayName, email, nil
 }
 
 // AuthenticateLdap: bind da conta de serviço → localiza o usuário → re-bind com a senha dele.
 // Retorna o DN, o nome de exibição e os DNs de grupo (memberOf) pra sincronizar depois.
-func AuthenticateLdap(repo access_repository.AccessRepository, username, password string) (dn, displayName string, groupDNs []string, err error) {
+func AuthenticateLdap(repo access_repository.AccessRepository, username, password string) (dn, displayName string, groupDNs []string, email string, err error) {
+	if strings.TrimSpace(password) == "" {
+		// bind com senha vazia vira "bind anônimo" e passaria — nunca aceitar
+		return "", "", nil, "", errors.New("usuário ou senha inválidos")
+	}
 	cfg, err := loadLdapConfig(repo)
 	if err != nil {
-		return "", "", nil, err
+		return "", "", nil, "", err
 	}
 	if !cfg.Enabled {
-		return "", "", nil, ErrLdapDisabled
+		return "", "", nil, "", ErrLdapDisabled
 	}
 	if err := cfg.validate(); err != nil {
-		return "", "", nil, err
+		return "", "", nil, "", err
 	}
 
 	conn, err := dialLdap(cfg)
 	if err != nil {
-		return "", "", nil, err
+		return "", "", nil, "", err
 	}
 	defer conn.Close()
 
-	userDN, groups, name, err := searchUser(cfg, conn, username)
+	userDN, groups, name, mail, err := searchUser(cfg, conn, username)
 	if err != nil {
-		return "", "", nil, err
+		return "", "", nil, "", err
 	}
 
 	// Re-bind com as credenciais do próprio usuário — é isso que de fato autentica a senha.
 	userConn, err := dialLdap(cfg)
 	if err != nil {
-		return "", "", nil, err
+		return "", "", nil, "", err
 	}
 	defer userConn.Close()
 	if err := userConn.Bind(userDN, password); err != nil {
-		return "", "", nil, errors.New("usuário ou senha inválidos")
+		return "", "", nil, "", errors.New("usuário ou senha inválidos")
 	}
 
-	return userDN, name, groups, nil
+	return userDN, name, groups, mail, nil
+}
+
+// LdapTestResult: o que o botão "Testar login de usuário" mostra ao admin.
+type LdapTestResult struct {
+	DN            string   `json:"dn"`
+	DisplayName   string   `json:"displayName"`
+	Email         string   `json:"email"`
+	MemberOf      []string `json:"memberOf"`
+	MatchedGroups []string `json:"matchedGroups"` // grupos do evo-go que o usuário receberia
+	WouldBeAdmin  bool     `json:"wouldBeAdmin"`
+}
+
+// TestLdapUserLogin autentica um usuário de verdade no AD, sem criar nada, e
+// mostra quais grupos e papel ele receberia.
+func TestLdapUserLogin(repo access_repository.AccessRepository, username, password string) (*LdapTestResult, error) {
+	dn, name, groups, mail, err := AuthenticateLdap(repo, strings.TrimSpace(strings.ToLower(username)), password)
+	if err != nil {
+		return nil, err
+	}
+	res := &LdapTestResult{DN: dn, DisplayName: name, Email: mail, MemberOf: groups, MatchedGroups: []string{}}
+	if all, err := repo.ListGroups(); err == nil {
+		for _, g := range all {
+			if matchGroupDNs(groups, g.LdapGroupDN) {
+				res.MatchedGroups = append(res.MatchedGroups, g.Name)
+			}
+		}
+	}
+	if adminDN, _ := repo.GetSetting(settingLdapAdminGroupDN); adminDN != "" {
+		res.WouldBeAdmin = matchGroupDNs(groups, adminDN)
+	}
+	return res, nil
 }
 
 // TestLdapSettings faz apenas o bind da conta de serviço (sem usuário) — usado pelo botão "Testar conexão".

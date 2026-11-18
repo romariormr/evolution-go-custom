@@ -22,6 +22,7 @@ function useAuth() {
     // Methods
     login: authStore.login,
     loginWithPassword: authStore.loginWithPassword,
+    completeTwoFactor: authStore.completeTwoFactor,
     refreshUser: authStore.refreshUser,
     changePassword: authStore.changePassword,
     logout: authStore.logout,

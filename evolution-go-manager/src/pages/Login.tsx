@@ -19,6 +19,8 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [apiKey, setApiKey] = useState(auth.apiKey || '');
   const [error, setError] = useState('');
+  const [challenge, setChallenge] = useState('');
+  const [code, setCode] = useState('');
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -33,7 +35,18 @@ export default function Login() {
     setError('');
     try {
       if (mode === 'session') {
-        const user = await auth.loginWithPassword(apiUrl, username, password);
+        let user;
+        if (challenge) {
+          user = await auth.completeTwoFactor(apiUrl, challenge, code);
+        } else {
+          const outcome = await auth.loginWithPassword(apiUrl, username, password);
+          if (outcome.twoFactorRequired) {
+            setChallenge(outcome.challenge);
+            setCode('');
+            return;
+          }
+          user = outcome.user;
+        }
         toast.success(`Bem-vindo${user.displayName ? `, ${user.displayName}` : ''}!`);
         navigate(user.mustChangePassword ? '/manager/change-password' : '/manager', { replace: true });
       } else {
@@ -53,7 +66,9 @@ export default function Login() {
         navigate('/manager', { replace: true });
       }
     } catch (caught) {
-      const message = (caught as { message?: string })?.message || 'Não foi possível entrar.';
+      const message = (caught as { response?: { data?: { error?: string } } })?.response?.data?.error
+        || (caught as { message?: string })?.message || 'Não foi possível entrar.';
+      if (message.includes('tempo para digitar')) setChallenge('');
       setError(message);
       toast.error(message);
     } finally {
@@ -87,11 +102,18 @@ export default function Login() {
 
           <form onSubmit={submit} className="space-y-4">
             <div className="space-y-2"><Label htmlFor="apiUrl">URL da API</Label><Input id="apiUrl" value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} required disabled={loading} /></div>
-            {mode === 'session' ? <>
-              <div className="space-y-2"><Label htmlFor="username">Usuário</Label><Input id="username" autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} required disabled={loading} /></div>
+            {mode === 'session' ? (challenge ? <>
+              <div className="space-y-2">
+                <Label htmlFor="code">Código do app autenticador</Label>
+                <Input id="code" inputMode="numeric" autoComplete="one-time-code" maxLength={6} autoFocus value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} required disabled={loading} />
+                <p className="text-xs text-muted-foreground">Abra o Google/Microsoft Authenticator e digite os 6 números.</p>
+              </div>
+              <button type="button" className="text-xs text-muted-foreground underline" onClick={() => { setChallenge(''); setCode(''); }}>Voltar</button>
+            </> : <>
+              <div className="space-y-2"><Label htmlFor="username">Usuário ou e-mail</Label><Input id="username" autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} required disabled={loading} /></div>
               <div className="space-y-2"><Label htmlFor="password">Senha</Label><Input id="password" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required disabled={loading} /></div>
-            </> : <div className="space-y-2"><Label htmlFor="apiKey">API Key (GLOBAL_API_KEY)</Label><Input id="apiKey" type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} required minLength={10} disabled={loading} /><p className="text-xs text-muted-foreground">Fallback administrativo compatível com o fluxo anterior.</p></div>}
-            <Button type="submit" className="w-full" disabled={loading}>{loading ? 'Entrando...' : 'Entrar'}</Button>
+            </>) : <div className="space-y-2"><Label htmlFor="apiKey">API Key (GLOBAL_API_KEY)</Label><Input id="apiKey" type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} required minLength={10} disabled={loading} /><p className="text-xs text-muted-foreground">Fallback administrativo compatível com o fluxo anterior.</p></div>}
+            <Button type="submit" className="w-full" disabled={loading}>{loading ? 'Entrando...' : challenge ? 'Confirmar código' : 'Entrar'}</Button>
           </form>
         </div>
       </div>

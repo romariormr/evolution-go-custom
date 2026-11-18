@@ -1,6 +1,9 @@
 package access_repository
 
 import (
+	"strings"
+	"time"
+
 	access_model "github.com/EvolutionAPI/evolution-go/pkg/access/model"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -43,6 +46,32 @@ type AccessRepository interface {
 	GetSetting(key string) (string, error)
 	SetSetting(key, value string) error
 	ListSettings() (map[string]string, error)
+
+	// login por e-mail
+	GetUserByEmail(email string) (*access_model.AccessUser, error)
+	CountActiveAdmins() (int64, error)
+
+	// sessões
+	CreateSession(s *access_model.AccessSession) error
+	GetSessionByHash(hash string) (*access_model.AccessSession, error)
+	TouchSession(id string, at time.Time) error
+	ListSessions(userId string) ([]*access_model.AccessSession, error)
+	GetSession(id string) (*access_model.AccessSession, error)
+	RevokeSession(id string) error
+	RevokeUserSessions(userId, exceptId string) error
+	PurgeSessions(before time.Time) error
+
+	// auditoria
+	AddAudit(a *access_model.AccessAudit) error
+	ListAudit(f AuditFilter) ([]*access_model.AccessAudit, int64, error)
+	PurgeAudit(before time.Time) error
+}
+
+type AuditFilter struct {
+	Username string
+	Action   string
+	Limit    int
+	Offset   int
 }
 
 type accessRepository struct {
@@ -235,6 +264,110 @@ func (r *accessRepository) GetSetting(key string) (string, error) {
 func (r *accessRepository) SetSetting(key, value string) error {
 	s := access_model.AccessSetting{Key: key, Value: value}
 	return r.db.Save(&s).Error
+}
+
+// ── login por e-mail / admins ────────────────────────────────────
+
+func (r *accessRepository) GetUserByEmail(email string) (*access_model.AccessUser, error) {
+	email = strings.TrimSpace(strings.ToLower(email))
+	if email == "" {
+		return nil, gorm.ErrRecordNotFound
+	}
+	var u access_model.AccessUser
+	if err := r.db.Preload("Groups").Where("LOWER(email) = ?", email).First(&u).Error; err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
+func (r *accessRepository) CountActiveAdmins() (int64, error) {
+	var n int64
+	err := r.db.Model(&access_model.AccessUser{}).
+		Where("role = ? AND active = ?", access_model.RoleAdmin, true).Count(&n).Error
+	return n, err
+}
+
+// ── sessões ──────────────────────────────────────────────────────
+
+func (r *accessRepository) CreateSession(s *access_model.AccessSession) error {
+	return r.db.Create(s).Error
+}
+
+func (r *accessRepository) GetSessionByHash(hash string) (*access_model.AccessSession, error) {
+	var s access_model.AccessSession
+	if err := r.db.Where("token_hash = ?", hash).First(&s).Error; err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
+func (r *accessRepository) TouchSession(id string, at time.Time) error {
+	return r.db.Model(&access_model.AccessSession{}).Where("id = ?", id).Update("last_seen_at", at).Error
+}
+
+// ListSessions: sessões ainda válidas (não revogadas, não expiradas), mais recentes primeiro.
+func (r *accessRepository) ListSessions(userId string) ([]*access_model.AccessSession, error) {
+	var out []*access_model.AccessSession
+	err := r.db.Where("user_id = ? AND revoked_at IS NULL AND expires_at > ?", userId, time.Now()).
+		Order("last_seen_at DESC").Find(&out).Error
+	return out, err
+}
+
+func (r *accessRepository) GetSession(id string) (*access_model.AccessSession, error) {
+	var s access_model.AccessSession
+	if err := r.db.Where("id = ?", id).First(&s).Error; err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
+func (r *accessRepository) RevokeSession(id string) error {
+	return r.db.Model(&access_model.AccessSession{}).
+		Where("id = ? AND revoked_at IS NULL", id).Update("revoked_at", time.Now()).Error
+}
+
+func (r *accessRepository) RevokeUserSessions(userId, exceptId string) error {
+	q := r.db.Model(&access_model.AccessSession{}).Where("user_id = ? AND revoked_at IS NULL", userId)
+	if exceptId != "" {
+		q = q.Where("id <> ?", exceptId)
+	}
+	return q.Update("revoked_at", time.Now()).Error
+}
+
+// PurgeSessions apaga sessões expiradas/revogadas antes de "before".
+func (r *accessRepository) PurgeSessions(before time.Time) error {
+	return r.db.Where("expires_at < ? OR (revoked_at IS NOT NULL AND revoked_at < ?)", before, before).
+		Delete(&access_model.AccessSession{}).Error
+}
+
+// ── auditoria ────────────────────────────────────────────────────
+
+func (r *accessRepository) AddAudit(a *access_model.AccessAudit) error {
+	return r.db.Create(a).Error
+}
+
+func (r *accessRepository) ListAudit(f AuditFilter) ([]*access_model.AccessAudit, int64, error) {
+	if f.Limit <= 0 || f.Limit > 500 {
+		f.Limit = 100
+	}
+	q := r.db.Model(&access_model.AccessAudit{})
+	if f.Username != "" {
+		q = q.Where("LOWER(username) LIKE ?", "%"+strings.ToLower(f.Username)+"%")
+	}
+	if f.Action != "" {
+		q = q.Where("action = ?", f.Action)
+	}
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var out []*access_model.AccessAudit
+	err := q.Order("created_at DESC").Limit(f.Limit).Offset(f.Offset).Find(&out).Error
+	return out, total, err
+}
+
+func (r *accessRepository) PurgeAudit(before time.Time) error {
+	return r.db.Where("created_at < ?", before).Delete(&access_model.AccessAudit{}).Error
 }
 
 func (r *accessRepository) ListSettings() (map[string]string, error) {

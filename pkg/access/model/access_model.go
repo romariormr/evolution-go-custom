@@ -26,7 +26,68 @@ type AccessUser struct {
 	MustChangePassword bool      `json:"mustChangePassword" gorm:"default:false"`
 	CreatedAt          time.Time `json:"createdAt" gorm:"autoCreateTime"`
 
+	// E-mail: também serve para entrar (no lugar do username). Vazio = só username.
+	Email string `json:"email" gorm:"index"`
+	// Active=false bloqueia o login e derruba as sessões abertas.
+	Active bool `json:"active" gorm:"default:true"`
+	// SeeAllInstances: só vale para admin. true = vê todas as instâncias;
+	// false = vê só as dos grupos dele (como um usuário comum).
+	SeeAllInstances bool       `json:"seeAllInstances" gorm:"default:true"`
+	LastLoginAt     *time.Time `json:"lastLoginAt,omitempty"`
+
+	// 2FA (TOTP, app autenticador). Segredos cifrados (ver crypto.go).
+	TotpEnabled       bool   `json:"totpEnabled" gorm:"default:false"`
+	TotpSecret        string `json:"-"`
+	TotpPendingSecret string `json:"-"`
+
 	Groups []AccessGroup `json:"groups,omitempty" gorm:"many2many:evogo_user_groups;joinForeignKey:UserId;joinReferences:GroupId"`
+}
+
+// Sessão do Manager guardada no servidor: o navegador recebe um token
+// aleatório e o banco guarda só o hash dele. Permite logout de verdade,
+// listar as sessões abertas e derrubar uma sessão.
+type AccessSession struct {
+	Id         string     `json:"id" gorm:"type:uuid;primaryKey"`
+	UserId     string     `json:"userId" gorm:"type:uuid;index"`
+	TokenHash  string     `json:"-" gorm:"uniqueIndex;not null"`
+	IP         string     `json:"ip"`
+	UserAgent  string     `json:"userAgent"`
+	CreatedAt  time.Time  `json:"createdAt" gorm:"autoCreateTime"`
+	LastSeenAt time.Time  `json:"lastSeenAt"`
+	ExpiresAt  time.Time  `json:"expiresAt" gorm:"index"`
+	RevokedAt  *time.Time `json:"revokedAt,omitempty"`
+	Current    bool       `json:"current" gorm:"-"`
+}
+
+func (AccessSession) TableName() string { return "evogo_sessions" }
+
+func (s *AccessSession) BeforeCreate(tx *gorm.DB) error {
+	if s.Id == "" {
+		s.Id = uuid.NewString()
+	}
+	return nil
+}
+
+// Registro de auditoria: logins, falhas e mudanças administrativas.
+type AccessAudit struct {
+	Id        string    `json:"id" gorm:"type:uuid;primaryKey"`
+	CreatedAt time.Time `json:"createdAt" gorm:"autoCreateTime;index"`
+	UserId    string    `json:"userId,omitempty" gorm:"index"`
+	Username  string    `json:"username,omitempty"`
+	IP        string    `json:"ip,omitempty"`
+	Action    string    `json:"action" gorm:"index"`
+	Target    string    `json:"target,omitempty"`
+	Detail    string    `json:"detail,omitempty"`
+	Success   bool      `json:"success"`
+}
+
+func (AccessAudit) TableName() string { return "evogo_audit_log" }
+
+func (a *AccessAudit) BeforeCreate(tx *gorm.DB) error {
+	if a.Id == "" {
+		a.Id = uuid.NewString()
+	}
+	return nil
 }
 
 func (AccessUser) TableName() string { return "evogo_admin_users" }

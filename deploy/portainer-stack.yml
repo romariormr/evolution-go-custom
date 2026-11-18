@@ -11,6 +11,7 @@
 #
 # Variáveis da stack (Portainer → Environment variables):
 #   GLOBAL_API_KEY   obrigatória — chave global da API (uuid forte, guarde no cofre)
+#   EVOGO_SECRET_KEY recomendada — cifra segredos no banco (LDAP, 2FA); nunca trocar
 #   EVOGO_DOMAIN     obrigatória — domínio público, ex: evolutiongo.exemplo.com
 #   DB_HOST          obrigatória — host do PostgreSQL
 #   DB_NAME          obrigatória — banco único, ex: evo_go_ti
@@ -38,6 +39,10 @@ services:
       SERVER_URL: "https://${EVOGO_DOMAIN}"
       CLIENT_NAME: "evolution-go"
       GLOBAL_API_KEY: "${GLOBAL_API_KEY}"
+      # Chave que cifra segredos no banco (senha do LDAP, 2FA). Defina uma vez
+      # e não troque. Vazia = usa a GLOBAL_API_KEY.
+      EVOGO_SECRET_KEY: "${EVOGO_SECRET_KEY:-}"
+      AUDIT_RETENTION_DAYS: "180"
       TZ: "America/Fortaleza"
 
       # Banco: um só banco para sessões e dados.
