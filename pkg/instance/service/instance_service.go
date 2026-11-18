@@ -406,9 +406,15 @@ func (i instances) Logout(instance *instance_model.Instance) (*instance_model.In
 }
 
 func (i instances) Status(instance *instance_model.Instance) (*StatusStruct, error) {
+	// Status nunca é erro: instância desconectada (inclusive depois de um
+	// /instance/disconnect manual) responde 200 com connected=false, em vez
+	// de 400 até reiniciar o container.
 	client, err := i.ensureClientConnected(instance.Id)
 	if err != nil {
-		return nil, err
+		return &StatusStruct{
+			InstanceId:   instance.Id,
+			InstanceName: instance.Name,
+		}, nil
 	}
 
 	isConnected := client.IsConnected()
@@ -516,9 +522,38 @@ func (i instances) GetQr(instance *instance_model.Instance) (*QrcodeStruct, erro
 }
 
 func (i instances) Pair(data *PairStruct, instance *instance_model.Instance) (*PairReturnStruct, error) {
-	code, err := i.clientPointer[instance.Id].PairPhone(context.Background(), data.Phone, true, whatsmeow.PairClientChrome, "Chrome (Linux)")
+	// Antes: erro do PairPhone era engolido e voltava 200 com código vazio, e o
+	// cliente podia nem estar conectado aguardando pareamento. Agora sobe a
+	// instância se preciso, espera o websocket e devolve o erro real.
+	client := i.clientPointer[instance.Id]
+	if client == nil || !client.IsConnected() {
+		if client == nil {
+			if err := i.whatsmeowService.StartInstance(instance.Id); err != nil {
+				return nil, fmt.Errorf("não foi possível iniciar a instância: %v", err)
+			}
+		} else if err := client.Connect(); err != nil && !errors.Is(err, whatsmeow.ErrAlreadyConnected) {
+			return nil, fmt.Errorf("não foi possível conectar ao WhatsApp: %v", err)
+		}
+		deadline := time.Now().Add(15 * time.Second)
+		for {
+			client = i.clientPointer[instance.Id]
+			if client != nil && client.IsConnected() {
+				break
+			}
+			if time.Now().After(deadline) {
+				return nil, errors.New("o WhatsApp não respondeu a tempo; tente de novo")
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
+	if client.IsLoggedIn() {
+		return nil, errors.New("instância já está pareada; faça logout antes de parear de novo")
+	}
+
+	code, err := client.PairPhone(context.Background(), data.Phone, true, whatsmeow.PairClientChrome, "Chrome (Linux)")
 	if err != nil {
-		i.loggerWrapper.GetLogger(instance.Id).LogError("[%s] something went wrong calling pair phone", instance.Id)
+		i.loggerWrapper.GetLogger(instance.Id).LogError("[%s] falha ao gerar código de pareamento: %v", instance.Id, err)
+		return nil, fmt.Errorf("falha ao gerar código de pareamento: %v", err)
 	}
 
 	return &PairReturnStruct{PairingCode: code}, nil

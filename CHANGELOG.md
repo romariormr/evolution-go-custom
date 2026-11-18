@@ -1,5 +1,24 @@
 # Evolution GO - Changelog
 
+## v0.16.41
+
+### Fixes
+- **Vazamento de conexões no Postgres a cada conexão/reconexão de instância.** O `StartClient` chamava `sqlstore.New` toda vez, abrindo um pool novo para o banco de sessões (`POSTGRES_AUTH_DB`) que nunca era fechado. Agora o processo usa um único container de sessões, montado com `sqlstore.NewWithDB` sobre o pool que o `main.go` já abre e limita (mesma correção da 0.7.3 do Evolution GO original).
+- **Atualização do schema de sessões com prazo de 60s.** Se o banco aceitar TCP mas não responder, desiste em vez de travar todos os `StartClient`; a falha não fica em cache e a próxima chamada tenta de novo.
+- **`POST /instance/pair` devolvia 200 com código vazio.** O erro do `PairPhone` era engolido e a instância podia nem estar conectada aguardando pareamento. Agora sobe a instância se preciso, espera o websocket (até 15s), recusa instância já pareada e devolve o erro real.
+- **`GET /instance/status` dava 400 depois de um disconnect manual.** Agora responde 200 com `Connected=false`.
+- **Driver `postgres` registrado explicitamente** em `pkg/config` (antes vinha de um import lateral no pacote do whatsmeow).
+
+### Melhorias
+- **whatsmeow atualizado** (`b3832c2bd1d1` de 25/09 → `19d61352436f` de 16/11): reconexão automática quando o handshake não responde, keepalive sem sobrescrever desconexões concorrentes, backoff do app state em rate-limit, mais formatos de recibo agrupado, vídeos com sidecar de streaming, nome comercial verificado no `GetUserInfo`, contagem de encaminhamentos em canais.
+- **Envio em grupo só-admins é recusado antes de sair** (`CheckPermissions`) com mensagem clara, em vez de o WhatsApp descartar em silêncio.
+- **Número sem WhatsApp** devolve erro claro (`o número X não tem WhatsApp`).
+- **Pool de conexões configurável:** `POSTGRES_AUTH_MAX_OPEN`/`_MAX_IDLE` e `POSTGRES_USERS_MAX_OPEN`/`_MAX_IDLE` (padrão 25/5 cada).
+
+### ⚠️ Mudança de formato (compatível)
+- **Lista de bloqueados** (`/user/block`, `/user/unblock`, `/user/blocklist`) segue o formato novo do whatsmeow: `Items` (`{LID, PN, Active}`) e `AddressingMode`. O campo antigo `JIDs` **continua** vindo (número quando conhecido, senão LID), então fluxos existentes não quebram. Bloquear número sem LID no WhatsApp agora retorna erro.
+- O banco de sessões ganha 1 coluna na subida (`whatsmeow_chat_settings.wasa_root_secret_id`, schema v16 do whatsmeow, marcada como compatível com v8+): voltar para a 0.16.40 continua funcionando.
+
 ## v0.16.40
 
 ### Fixes
