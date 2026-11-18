@@ -1,5 +1,10 @@
 # Evolution GO - Changelog
 
+## v0.16.40
+
+### Fixes
+- **Panic ao arquivar conversa.** O evento `Archive` tratava o dado bruto do evento como mapa (`postMap["data"].(map[string]interface{})`), o que dava panic a cada conversa arquivada/desarquivada (o whatsmeow recuperava, mas enchia o log com stack trace) e o evento `Archive` nunca era enviado ao webhook. Agora o webhook recebe `JID`, `Timestamp`, `Action` e `FromFullSync`.
+
 ## v0.16.39
 
 ### Features
