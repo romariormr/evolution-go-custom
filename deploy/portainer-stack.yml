@@ -1,78 +1,133 @@
-# Evolution GO — stack Portainer (Docker Swarm) com banco PostgreSQL EXTERNO
-# Requisitos:
-#   - Imagem buildada no host: docker build -t evolution-go-custom:local .
-#   - Traefik já rodando no Swarm (ajuste TRAEFIK_NETWORK)
-#   - Bancos evogo_auth e evogo_users criados no PostgreSQL externo
-#   - Volumes externos criados ANTES do primeiro deploy (nomes com o
-#     prefixo do stack, ex.: "evolution-go_evolution_go_data" — confirme o
-#     nome exato via `docker volume ls` se recriar em outro stack name):
-#       docker volume create evolution-go_evolution_go_data
-#       docker volume create evolution-go_evolution_go_logs
-#     Sem isso, recriar a stack apaga os volumes automáticos e perde o
-#     estado do WhatsApp (precisa escanear QR de novo em todas as instâncias).
+# Evolution GO (custom) — stack Portainer / Docker Swarm, PostgreSQL EXTERNO
 #
-# Variáveis de ambiente da stack (Portainer → Environment variables):
-#   GLOBAL_API_KEY   — chave global da API (uuid forte)
-#   EVOGO_DOMAIN     — domínio público (Traefik), ex: evolutiongo.exemplo.com
-#   DB_HOST          — host do PostgreSQL externo
-#   DB_USER          — usuário do banco (owner dos DBs evogo_auth/evogo_users)
-#   DB_PASSWORD      — senha do usuário
-#   WHATSAPP_VERSION_MAJOR/MINOR/PATCH, WHATSAPP_PLATFORM — ver .env.example
-#   MESSAGE_SECRETS_RETENTION_DAYS — ver .env.example
+# Onde ficam os dados:
+#   - Sessões do WhatsApp (whatsmeow_*) e dados da API (instâncias, histórico,
+#     campanhas, usuários do Manager...) ficam no PostgreSQL. Os dois DSNs
+#     podem apontar para o MESMO banco (não há conflito de nomes de tabela).
+#   - Volume "data" só é usado sem Postgres (SQLite); com Postgres fica vazio.
+#   - Volume "logs": só log em arquivo. Perder não afeta nada.
+#   => Recriar/renomear a stack NÃO exige ler QR de novo, desde que o banco
+#      seja o mesmo.
+#
+# Variáveis da stack (Portainer → Environment variables):
+#   GLOBAL_API_KEY   obrigatória — chave global da API (uuid forte, guarde no cofre)
+#   EVOGO_DOMAIN     obrigatória — domínio público, ex: evolutiongo.exemplo.com
+#   DB_HOST          obrigatória — host do PostgreSQL
+#   DB_NAME          obrigatória — banco único, ex: evo_go_ti
+#   DB_USER          obrigatória — usuário do banco (dono do DB_NAME)
+#   DB_PASSWORD      obrigatória — senha (gerada no cofre; sem @ : / ? # para não quebrar a URL)
+#   DB_PORT          opcional — padrão 5432
+#   DB_SSLMODE       opcional — disable | require | verify-full (padrão disable)
+#   TRAEFIK_NETWORK  opcional — rede externa do Traefik (padrão minha_rede)
+#   MINIO_*          opcional — MINIO_ENABLED=true + ENDPOINT/ACCESS_KEY/SECRET_KEY/BUCKET
+#   EVOGO_IMAGE      opcional — fixe uma versão (ex: ...:0.16.41) para não
+#                    pegar a :latest sem querer num restart
+#
+# ⚠️ Sempre 1 réplica. Duas cópias com o mesmo banco usam as mesmas sessões do
+#    WhatsApp e se derrubam ("stream replaced"). Por isso o update é stop-first.
 
 version: "3.8"
 
+x-db: &db "postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT:-5432}/${DB_NAME}?sslmode=${DB_SSLMODE:-disable}"
+
 services:
-  evolution-go:
+  evolution-go:   # o nome do serviço vira o DNS interno (http://evolution-go:4000)
     image: "${EVOGO_IMAGE:-ghcr.io/romariormr/evolution-go-custom:latest}"
     environment:
       SERVER_PORT: "4000"
+      SERVER_URL: "https://${EVOGO_DOMAIN}"
       CLIENT_NAME: "evolution-go"
       GLOBAL_API_KEY: "${GLOBAL_API_KEY}"
-      POSTGRES_AUTH_DB: "postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:5432/evogo_auth?sslmode=disable"
-      POSTGRES_USERS_DB: "postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:5432/evogo_users?sslmode=disable"
-      DATABASE_SAVE_MESSAGES: "true"
-      WADEBUG: "INFO"
-      LOGTYPE: "console"
-      LOG_DIRECTORY: "/app/logs"
-      CONNECT_ON_STARTUP: "false"
-      WEBHOOK_FILES: "true"
-      OS_NAME: "Linux"
-      WEBHOOK_URL: ""
-      AMQP_GLOBAL_ENABLED: "false"
-      NATS_GLOBAL_ENABLED: "false"
-      MINIO_ENABLED: "false"
-      EVENT_IGNORE_GROUP: "false"
-      EVENT_IGNORE_STATUS: "true"
+      TZ: "America/Fortaleza"
+
+      # Banco: um só banco para sessões e dados.
+      POSTGRES_AUTH_DB: *db
+      POSTGRES_USERS_DB: *db
+      # Limite de conexões (total máximo = AUTH + USERS). Combine com o DBA.
+      POSTGRES_AUTH_MAX_OPEN: "15"
+      POSTGRES_AUTH_MAX_IDLE: "3"
+      POSTGRES_USERS_MAX_OPEN: "15"
+      POSTGRES_USERS_MAX_IDLE: "3"
+
+      # Histórico e retenção
+      DATABASE_SAVE_MESSAGES: "true"           # tabela antiga de mensagens (usada pelos endpoints /message)
+      MESSAGE_HISTORY: "on"
+      MESSAGE_HISTORY_RETENTION_DAYS: "90"
+      MESSAGE_SECRETS_RETENTION_DAYS: "30"
+
+      # Downloads por URL (proteção SSRF). Rede interna liberada por padrão.
+      MEDIA_FETCH_BLOCK_PRIVATE: "false"
+      MEDIA_FETCH_MAX_MB: "100"
+
+      # Comportamento
+      CONNECT_ON_STARTUP: "true"
       QRCODE_MAX_COUNT: "5"
       CHECK_USER_EXISTS: "true"
-      WHATSAPP_PLATFORM: "${WHATSAPP_PLATFORM:-desktop}"
+      EVENT_IGNORE_GROUP: "false"
+      EVENT_IGNORE_STATUS: "true"
+      WEBHOOK_FILES: "true"
+      OS_NAME: "Linux"
+      # Versão do cliente WhatsApp. Se o WhatsApp recusar a conexão com
+      # "Client outdated (405)", suba o PATCH (ver "proto: update to vNNN" nos
+      # commits do whatsmeow) — não precisa nova imagem.
+      WHATSAPP_PLATFORM: "desktop"
       WHATSAPP_VERSION_MAJOR: "${WHATSAPP_VERSION_MAJOR:-2}"
       WHATSAPP_VERSION_MINOR: "${WHATSAPP_VERSION_MINOR:-3000}"
-      WHATSAPP_VERSION_PATCH: "${WHATSAPP_VERSION_PATCH:-1044362777}"
-      MESSAGE_SECRETS_RETENTION_DAYS: "${MESSAGE_SECRETS_RETENTION_DAYS:-30}"
+      WHATSAPP_VERSION_PATCH: "${WHATSAPP_VERSION_PATCH:-1048844063}"
+
+      # Integrações desligadas (ligue só se usar; NATS sem servidor gera erro no log)
+      AMQP_GLOBAL_ENABLED: "false"
+      NATS_GLOBAL_ENABLED: "false"
+
+      # MinIO (mídias recebidas viram URL no webhook/histórico)
+      MINIO_ENABLED: "${MINIO_ENABLED:-false}"
+      MINIO_ENDPOINT: "${MINIO_ENDPOINT:-}"
+      MINIO_ACCESS_KEY: "${MINIO_ACCESS_KEY:-}"
+      MINIO_SECRET_KEY: "${MINIO_SECRET_KEY:-}"
+      MINIO_BUCKET: "${MINIO_BUCKET:-evo-go}"
+      MINIO_REGION: "${MINIO_REGION:-us-east-1}"
+      MINIO_USE_SSL: "${MINIO_USE_SSL:-false}"
+
+      # Logs
+      WADEBUG: "WARN"
+      LOGTYPE: "console"
+      LOG_DIRECTORY: "/app/logs"
     volumes:
-      - evolution_go_data:/app/dbdata
-      - evolution_go_logs:/app/logs
+      - data:/app/dbdata
+      - logs:/app/logs
     networks:
-      - traefik_net
+      - traefik
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:4000/server/ok"]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 30s
+      start_period: 60s
+    stop_grace_period: 30s     # tempo para fechar as conexões do WhatsApp com calma
+    logging:                   # sem isso o log do Docker cresce até encher o disco
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
     deploy:
       replicas: 1
+      update_config:
+        order: stop-first      # nunca duas cópias ao mesmo tempo (ver aviso no topo)
+        parallelism: 1
+        failure_action: rollback
+        monitor: 60s
+      rollback_config:
+        order: stop-first
       restart_policy:
         condition: any
         delay: 10s
+        window: 120s
       resources:
         limits:
           memory: 2G
           cpus: "2"
         reservations:
-          memory: 512M
+          memory: 256M
       labels:
         traefik.enable: "true"
         traefik.docker.network: "${TRAEFIK_NETWORK:-minha_rede}"
@@ -81,17 +136,17 @@ services:
         traefik.http.routers.evolutiongo.tls: "true"
         traefik.http.services.evolutiongo.loadbalancer.server.port: "4000"
 
-# Sem "ports:" de propósito — só acessível via Traefik (TLS), não expõe HTTP
-# puro direto na porta do host. Se precisar acesso direto pra debug, use
-# `docker exec` ou publique manualmente só durante o debug.
+# Sem "ports:" de propósito: só acessível via Traefik (TLS).
 
 volumes:
-  evolution_go_data:
-    external: true
-  evolution_go_logs:
-    external: true
+  # Nomes fixos: não dependem do nome da stack, então renomear a stack
+  # reaproveita os mesmos volumes.
+  data:
+    name: evogo_data
+  logs:
+    name: evogo_logs
 
 networks:
-  traefik_net:
+  traefik:
     external: true
     name: "${TRAEFIK_NETWORK:-minha_rede}"
