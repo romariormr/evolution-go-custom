@@ -1,5 +1,13 @@
 # Evolution GO - Changelog
 
+## v0.16.42
+
+### Fixes
+- **Versão padrão do cliente WhatsApp desatualizada.** Sem `WHATSAPP_VERSION_*` no ambiente, o fallback era `2.3000.1044362777` (julho), na faixa que o WhatsApp recusa com `Client outdated (405)` desde 02/11. Agora é `2.3000.1048844063`, a validada em produção. (Quem já define as variáveis não é afetado.)
+
+### Deploy
+- **`deploy/portainer-stack.yml` reescrito:** um banco só (`DB_NAME`) para sessões e dados via âncora YAML; limites de pool; `update_config`/`rollback_config` com `stop-first` (nunca duas cópias com as mesmas sessões) e rollback automático; rotação do log do Docker (20 MB × 5); volumes com nome fixo (`evogo_data`, `evogo_logs`), independentes do nome da stack — renomear a stack não perde nada; bloco MinIO opcional; `SERVER_URL`, `TZ`, histórico e SSRF documentados.
+
 ## v0.16.41
 
 ### Fixes

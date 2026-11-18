@@ -22,11 +22,13 @@ import (
 // Fallback usado quando WHATSAPP_VERSION_MAJOR/MINOR/PATCH não está no
 // ambiente — precisa ser atualizado de tempos em tempos (ver commits
 // "proto: update to vXXXXXXX" em github.com/tulir/whatsmeow). Última
-// atualização: 2026-07 (mesma versão validada em produção nesta sessão).
+// atualização: 2026-11 — 1048844063, a que roda em produção. A anterior
+// (1044362777, de julho) está na faixa que o WhatsApp passou a recusar com
+// "Client outdated (405)" desde 02/11.
 const (
 	fallbackWhatsappVersionMajor = 2
 	fallbackWhatsappVersionMinor = 3000
-	fallbackWhatsappVersionPatch = 1044362777
+	fallbackWhatsappVersionPatch = 1048844063
 )
 
 type Config struct {
