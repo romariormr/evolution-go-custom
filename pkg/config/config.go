@@ -251,6 +251,18 @@ func Load() *Config {
 
 	postgresUsersDB := os.Getenv(config_env.POSTGRES_USERS_DB)
 
+	// DATABASE_URL: um banco só para tudo (sessões do WhatsApp + dados da
+	// API). Preenche o que não foi definido; POSTGRES_AUTH_DB/USERS_DB
+	// explícitos continuam valendo.
+	if dbURL := strings.TrimSpace(os.Getenv("DATABASE_URL")); dbURL != "" {
+		if postgresAuthDB == "" {
+			postgresAuthDB = dbURL
+		}
+		if postgresUsersDB == "" {
+			postgresUsersDB = dbURL
+		}
+	}
+
 	postgresHost := os.Getenv(config_env.POSTGRES_HOST)
 	postgresPort := os.Getenv(config_env.POSTGRES_PORT)
 	postgresUser := os.Getenv(config_env.POSTGRES_USER)

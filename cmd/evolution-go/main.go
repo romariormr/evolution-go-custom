@@ -371,6 +371,13 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 	if err := accessService.Bootstrap(); err != nil {
 		log.Printf("[ACCESS] bootstrap falhou: %v", err)
 	}
+	// Limpeza diária de sessões vencidas e auditoria antiga.
+	go func() {
+		accessService.Maintenance()
+		for range time.Tick(24 * time.Hour) {
+			accessService.Maintenance()
+		}
+	}()
 	var logoBaseURL string
 	if config.MinioEnabled {
 		scheme := "http"
@@ -450,6 +457,8 @@ func migrate(db *gorm.DB) {
 		&access_model.AccessUserGroup{},
 		&access_model.AccessGroupInstance{},
 		&access_model.AccessSetting{},
+		&access_model.AccessSession{},
+		&access_model.AccessAudit{},
 		&chatwoot_model.ChatwootConfig{},
 		&chatwoot_model.ChatwootContactMap{},
 		&webhook_producer.WebhookDelivery{},

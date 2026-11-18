@@ -17,8 +17,40 @@ export interface AccessUser {
   authSource: 'local' | 'ldap';
   mustChangePassword: boolean;
   createdAt: string;
+  email?: string;
+  active?: boolean;
+  seeAllInstances?: boolean;
+  totpEnabled?: boolean;
+  lastLoginAt?: string;
   groups?: AccessGroup[];
 }
+
+export interface AccessSession {
+  id: string;
+  userId: string;
+  ip: string;
+  userAgent: string;
+  createdAt: string;
+  lastSeenAt: string;
+  expiresAt: string;
+  current: boolean;
+}
+
+export interface AccessAudit {
+  id: string;
+  createdAt: string;
+  userId?: string;
+  username?: string;
+  ip?: string;
+  action: string;
+  target?: string;
+  detail?: string;
+  success: boolean;
+}
+
+export type LoginOutcome =
+  | { twoFactorRequired: false; user: AccessUser }
+  | { twoFactorRequired: true; challenge: string };
 
 export interface AuthState {
   apiUrl: string;
@@ -32,7 +64,8 @@ export interface AuthState {
 
 export interface AuthStore extends AuthState {
   login: (apiUrl: string, apiKey: string) => Promise<void>;
-  loginWithPassword: (apiUrl: string, username: string, password: string) => Promise<AccessUser>;
+  loginWithPassword: (apiUrl: string, username: string, password: string) => Promise<LoginOutcome>;
+  completeTwoFactor: (apiUrl: string, challenge: string, code: string) => Promise<AccessUser>;
   refreshUser: () => Promise<AccessUser>;
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
   logout: () => Promise<void>;

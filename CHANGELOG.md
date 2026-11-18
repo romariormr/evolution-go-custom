@@ -1,5 +1,31 @@
 # Evolution GO - Changelog
 
+## v0.17.0
+
+### Acesso ao Manager: perfis, sessões, 2FA e auditoria
+
+- **Perfis com e-mail e senha.** O admin cria perfis só com e-mail (o e-mail vira o usuário) ou com usuário + e-mail; dá para entrar com qualquer um dos dois. Senha inicial com troca obrigatória no 1º acesso. Regras de senha: 8+ caracteres, letras e números, diferente do usuário/e-mail.
+- **Admin escolhe se vê todas as instâncias.** Novo campo `seeAllInstances` (padrão ligado): desligado, o admin vê só as instâncias dos grupos dele, como um perfil comum, mas continua administrando usuários e grupos.
+- **Perfis veem só as instâncias dos seus grupos** (como antes). Nova aba **Compartilhar instâncias**: escolhe a instância e marca os grupos que podem usá-la, mostrando quem é membro de cada grupo.
+- **Ativar/desativar perfil.** Desativado não entra e é desconectado na hora. Proteções: não dá para desativar/rebaixar/excluir a si mesmo nem o último admin ativo.
+- **Sessões guardadas no servidor** (`evogo_sessions`, só o hash do token). Logout de verdade; tela **Minha conta** lista as sessões abertas (navegador, IP, último uso) e permite encerrar; o admin vê e encerra sessões de qualquer perfil. Trocar a senha encerra as outras sessões; redefinir senha, remover 2FA, desativar ou excluir encerra todas.
+  - ⚠️ **Segurança:** antes a sessão era um JWT assinado com a `GLOBAL_API_KEY` — quem tivesse a chave forjava login de admin, e não havia como derrubar sessão. Ao atualizar, **todos precisam entrar de novo uma vez**.
+- **Verificação em duas etapas (2FA/TOTP)** opcional por perfil: QR code para Google/Microsoft Authenticator, Authy etc.; código não pode ser reutilizado; admin remove o 2FA de quem perdeu o celular.
+- **Bloqueio contra força bruta:** 5 erros do mesmo usuário + IP em 15 min bloqueiam por 15 min (20 erros de qualquer IP bloqueiam o usuário). Vale também para o código do 2FA.
+- **Auditoria** (`evogo_audit_log`, aba **Auditoria**): logins e falhas, logout, sessões encerradas, senhas, 2FA, usuários, grupos, compartilhamentos, instâncias criadas/excluídas e configurações. Retenção `AUDIT_RETENTION_DAYS` (padrão 180).
+- **LDAP/AD continua opcional**, com melhorias: senha da conta de serviço **cifrada no banco** (AES-256-GCM; a antiga em texto puro é cifrada na subida) e nunca devolvida pela API; `ldap.admin_group_dn` faz membros de um grupo do AD virarem admin; e-mail do AD (`mail`) preenchido no perfil; botão **Testar login de usuário** mostra papel e grupos que a pessoa receberia; senha vazia nunca autentica (evita bind anônimo).
+- Configurações aceitas só com prefixo `ldap.` e `branding.` (a lista livre de "outras configurações" saiu).
+
+### Banco
+- **`DATABASE_URL`**: um banco só para tudo; preenche `POSTGRES_AUTH_DB` e `POSTGRES_USERS_DB` quando não definidos.
+
+### Novas variáveis
+- `EVOGO_SECRET_KEY` (recomendada): chave para cifrar segredos no banco. Sem ela usa a `GLOBAL_API_KEY` — e aí trocar a `GLOBAL_API_KEY` exige redigitar a senha do LDAP e refazer o 2FA.
+- `AUDIT_RETENTION_DAYS` (padrão 180).
+
+### API (rotas novas em `/access`)
+`POST /login/2fa` · `GET|DELETE /me/sessions[/:id]` · `POST /me/2fa/setup|enable|disable` · `PUT /admin/users/:id` · `POST /admin/users/:id/2fa/reset` · `GET /admin/users/:id/sessions` · `DELETE /admin/sessions/:id` · `GET /admin/instances/:id/groups` · `GET /admin/audit` · `POST /admin/settings/ldap/test-user`. O `POST /login` aceita usuário ou e-mail e, com 2FA, responde `{twoFactorRequired, challenge}`.
+
 ## v0.16.42
 
 ### Fixes

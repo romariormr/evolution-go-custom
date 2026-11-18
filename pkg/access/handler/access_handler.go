@@ -1,17 +1,22 @@
 package access_handler
 
 import (
+	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	access_model "github.com/EvolutionAPI/evolution-go/pkg/access/model"
+	access_repository "github.com/EvolutionAPI/evolution-go/pkg/access/repository"
 	access_service "github.com/EvolutionAPI/evolution-go/pkg/access/service"
 	instance_service "github.com/EvolutionAPI/evolution-go/pkg/instance/service"
 	storage_interfaces "github.com/EvolutionAPI/evolution-go/pkg/storage/interfaces"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	qrcode "github.com/skip2/go-qrcode"
 )
 
 const sessionCookie = "evogo_session"
@@ -32,6 +37,7 @@ func RegisterRoutes(eng *gin.Engine, h *AccessHandler) {
 	pub := eng.Group("/access")
 	{
 		pub.POST("/login", h.Login)
+		pub.POST("/login/2fa", h.LoginTwoFactor)
 		pub.POST("/logout", h.Logout)
 		pub.GET("/branding", h.Branding)
 	}
@@ -41,6 +47,11 @@ func RegisterRoutes(eng *gin.Engine, h *AccessHandler) {
 	{
 		auth.GET("/me", h.Me)
 		auth.POST("/me/password", h.ChangePassword)
+		auth.GET("/me/sessions", h.MySessions)
+		auth.DELETE("/me/sessions/:sessionId", h.RevokeMySession)
+		auth.POST("/me/2fa/setup", h.TotpSetup)
+		auth.POST("/me/2fa/enable", h.TotpEnable)
+		auth.POST("/me/2fa/disable", h.TotpDisable)
 		auth.GET("/instances", h.ListInstances)
 		auth.POST("/instances", h.CreateInstance)
 		auth.DELETE("/instances/:instanceId", h.DeleteInstance)
@@ -51,9 +62,13 @@ func RegisterRoutes(eng *gin.Engine, h *AccessHandler) {
 	{
 		admin.GET("/users", h.AdminListUsers)
 		admin.POST("/users", h.AdminCreateUser)
+		admin.PUT("/users/:userId", h.AdminUpdateUser)
 		admin.PUT("/users/:userId/groups", h.AdminSetUserGroups)
 		admin.PUT("/users/:userId/password", h.AdminResetPassword)
+		admin.POST("/users/:userId/2fa/reset", h.AdminResetTotp)
+		admin.GET("/users/:userId/sessions", h.AdminUserSessions)
 		admin.DELETE("/users/:userId", h.AdminDeleteUser)
+		admin.DELETE("/sessions/:sessionId", h.AdminRevokeSession)
 
 		admin.GET("/groups", h.AdminListGroups)
 		admin.POST("/groups", h.AdminCreateGroup)
@@ -61,37 +76,51 @@ func RegisterRoutes(eng *gin.Engine, h *AccessHandler) {
 		admin.POST("/groups/:groupId/api-key/regenerate", h.AdminRegenerateGroupApiKey)
 		admin.POST("/groups/:groupId/instances/:instanceId", h.AdminLinkInstance)
 		admin.DELETE("/groups/:groupId/instances/:instanceId", h.AdminUnlinkInstance)
+		admin.GET("/instances/:instanceId/groups", h.AdminInstanceGroups)
+
+		admin.GET("/audit", h.AdminAudit)
 
 		admin.GET("/settings", h.AdminListSettings)
 		admin.PUT("/settings/:key", h.AdminSetSetting)
 		admin.POST("/settings/ldap/test", h.AdminTestLdap)
+		admin.POST("/settings/ldap/test-user", h.AdminTestLdapUser)
 		admin.POST("/branding/logo", h.AdminUploadLogo)
 	}
 }
 
 // ── middlewares ──────────────────────────────────────────────────
 
-func (h *AccessHandler) SessionMiddleware(ctx *gin.Context) {
-	token := ""
+func sessionToken(ctx *gin.Context) string {
+	if authz := ctx.GetHeader("Authorization"); strings.HasPrefix(authz, "Bearer ") {
+		return strings.TrimPrefix(authz, "Bearer ")
+	}
 	if c, err := ctx.Cookie(sessionCookie); err == nil {
-		token = c
+		return c
 	}
-	if token == "" {
-		authz := ctx.GetHeader("Authorization")
-		if strings.HasPrefix(authz, "Bearer ") {
-			token = strings.TrimPrefix(authz, "Bearer ")
-		}
-	}
+	return ""
+}
+
+func clientInfo(ctx *gin.Context) access_service.ClientInfo {
+	return access_service.ClientInfo{IP: ctx.ClientIP(), UserAgent: ctx.Request.UserAgent()}
+}
+
+func isHTTPS(ctx *gin.Context) bool {
+	return ctx.Request.TLS != nil || strings.EqualFold(ctx.GetHeader("X-Forwarded-Proto"), "https")
+}
+
+func (h *AccessHandler) SessionMiddleware(ctx *gin.Context) {
+	token := sessionToken(ctx)
 	if token == "" {
 		ctx.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "não autenticado"})
 		return
 	}
-	user, err := h.service.ValidateSession(token)
+	user, sess, err := h.service.ValidateSession(token)
 	if err != nil {
 		ctx.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "sessão inválida ou expirada"})
 		return
 	}
 	ctx.Set("accessUser", user)
+	ctx.Set("accessSession", sess)
 	ctx.Next()
 }
 
@@ -111,6 +140,19 @@ func currentUser(ctx *gin.Context) *access_model.AccessUser {
 	}
 	u, _ := v.(*access_model.AccessUser)
 	return u
+}
+
+func currentSessionId(ctx *gin.Context) string {
+	if v, ok := ctx.Get("accessSession"); ok {
+		if s, ok := v.(*access_model.AccessSession); ok && s != nil {
+			return s.Id
+		}
+	}
+	return ""
+}
+
+func (h *AccessHandler) audit(ctx *gin.Context, action, target, detail string, success bool) {
+	h.service.Audit(currentUser(ctx), clientInfo(ctx), action, target, detail, success)
 }
 
 // ── branding (público) ────────────────────────────────────────────
@@ -141,31 +183,87 @@ func (h *AccessHandler) Branding(ctx *gin.Context) {
 // ── auth ─────────────────────────────────────────────────────────
 
 type loginBody struct {
-	Username string `json:"username" binding:"required"`
+	// Username: usuário ou e-mail.
+	Username string `json:"username"`
+	Email    string `json:"email"`
 	Password string `json:"password" binding:"required"`
+}
+
+func (h *AccessHandler) setSessionCookie(ctx *gin.Context, token string) {
+	ctx.SetSameSite(http.SameSiteLaxMode)
+	ctx.SetCookie(sessionCookie, token, int(12*60*60), "/", "", isHTTPS(ctx), true)
+}
+
+func (h *AccessHandler) loginResponse(ctx *gin.Context, identifier string, res *access_service.LoginResult, err error) {
+	ci := clientInfo(ctx)
+	if err != nil {
+		var locked access_service.ErrLocked
+		if errors.As(err, &locked) {
+			h.service.Audit(access_service.AuditUsername(identifier), ci, access_service.AuditLoginFailed, identifier, "bloqueado por excesso de tentativas", false)
+			ctx.JSON(http.StatusTooManyRequests, gin.H{"error": err.Error()})
+			return
+		}
+		msg := "usuário ou senha inválidos"
+		if errors.Is(err, access_service.ErrInvalidCode) {
+			msg = "código inválido"
+		} else if !errors.Is(err, access_service.ErrInvalidCredentials) {
+			msg = err.Error()
+		}
+		h.service.Audit(access_service.AuditUsername(identifier), ci, access_service.AuditLoginFailed, identifier, msg, false)
+		ctx.JSON(http.StatusUnauthorized, gin.H{"error": msg})
+		return
+	}
+	if res.TwoFactorRequired {
+		ctx.JSON(http.StatusOK, gin.H{"twoFactorRequired": true, "challenge": res.Challenge})
+		return
+	}
+	h.service.Audit(res.User, ci, access_service.AuditLogin, res.User.Username, "", true)
+	h.setSessionCookie(ctx, res.Token)
+	ctx.JSON(http.StatusOK, gin.H{"token": res.Token, "user": res.User})
 }
 
 func (h *AccessHandler) Login(ctx *gin.Context) {
 	var body loginBody
 	if err := ctx.ShouldBindJSON(&body); err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "username e password são obrigatórios"})
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "usuário/e-mail e senha são obrigatórios"})
 		return
 	}
-	token, user, err := h.service.Login(body.Username, body.Password)
-	if err != nil {
-		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "usuário ou senha inválidos"})
+	identifier := strings.TrimSpace(body.Username)
+	if identifier == "" {
+		identifier = strings.TrimSpace(body.Email)
+	}
+	if identifier == "" {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "usuário/e-mail e senha são obrigatórios"})
 		return
 	}
-	ctx.SetSameSite(http.SameSiteLaxMode)
-	ctx.SetCookie(sessionCookie, token, int(12*60*60), "/", "", false, true)
-	ctx.JSON(http.StatusOK, gin.H{
-		"token": token,
-		"user":  user,
-	})
+	res, err := h.service.Login(identifier, body.Password, clientInfo(ctx))
+	h.loginResponse(ctx, identifier, res, err)
+}
+
+type twoFactorBody struct {
+	Challenge string `json:"challenge" binding:"required"`
+	Code      string `json:"code" binding:"required"`
+}
+
+func (h *AccessHandler) LoginTwoFactor(ctx *gin.Context) {
+	var body twoFactorBody
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "challenge e code são obrigatórios"})
+		return
+	}
+	res, err := h.service.LoginTwoFactor(body.Challenge, body.Code, clientInfo(ctx))
+	h.loginResponse(ctx, "", res, err)
 }
 
 func (h *AccessHandler) Logout(ctx *gin.Context) {
-	ctx.SetCookie(sessionCookie, "", -1, "/", "", false, true)
+	token := sessionToken(ctx)
+	if token != "" {
+		if user, _, err := h.service.ValidateSession(token); err == nil {
+			h.service.Audit(user, clientInfo(ctx), access_service.AuditLogout, user.Username, "", true)
+		}
+		h.service.Logout(token)
+	}
+	ctx.SetCookie(sessionCookie, "", -1, "/", "", isHTTPS(ctx), true)
 	ctx.JSON(http.StatusOK, gin.H{"message": "logout"})
 }
 
@@ -184,11 +282,81 @@ func (h *AccessHandler) ChangePassword(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "currentPassword e newPassword são obrigatórios"})
 		return
 	}
-	if err := h.service.ChangePassword(currentUser(ctx).Id, body.CurrentPassword, body.NewPassword); err != nil {
+	if err := h.service.ChangePassword(currentUser(ctx).Id, body.CurrentPassword, body.NewPassword, currentSessionId(ctx)); err != nil {
+		h.audit(ctx, access_service.AuditPasswordChange, currentUser(ctx).Username, err.Error(), false)
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	ctx.JSON(http.StatusOK, gin.H{"message": "senha alterada"})
+	h.audit(ctx, access_service.AuditPasswordChange, currentUser(ctx).Username, "outras sessões encerradas", true)
+	ctx.JSON(http.StatusOK, gin.H{"message": "senha alterada; as outras sessões foram encerradas"})
+}
+
+// ── minhas sessões / 2FA ─────────────────────────────────────────
+
+func (h *AccessHandler) MySessions(ctx *gin.Context) {
+	list, err := h.service.ListSessions(currentUser(ctx).Id, currentSessionId(ctx))
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"data": list})
+}
+
+func (h *AccessHandler) RevokeMySession(ctx *gin.Context) {
+	id := ctx.Param("sessionId")
+	if err := h.service.RevokeOwnSession(currentUser(ctx).Id, id); err != nil {
+		ctx.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+		return
+	}
+	h.audit(ctx, access_service.AuditSessionRevoked, id, "pelo próprio usuário", true)
+	ctx.JSON(http.StatusOK, gin.H{"message": "sessão encerrada"})
+}
+
+func (h *AccessHandler) TotpSetup(ctx *gin.Context) {
+	secret, url, err := h.service.StartTotpSetup(currentUser(ctx).Id)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	qr := ""
+	if png, err := qrcode.Encode(url, qrcode.Medium, 240); err == nil {
+		qr = "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
+	}
+	ctx.JSON(http.StatusOK, gin.H{"secret": secret, "otpauthUrl": url, "qrCode": qr})
+}
+
+type codeBody struct {
+	Code     string `json:"code" binding:"required"`
+	Password string `json:"password"`
+}
+
+func (h *AccessHandler) TotpEnable(ctx *gin.Context) {
+	var body codeBody
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "code é obrigatório"})
+		return
+	}
+	if err := h.service.EnableTotp(currentUser(ctx).Id, body.Code); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	h.audit(ctx, access_service.Audit2FAEnabled, currentUser(ctx).Username, "", true)
+	ctx.JSON(http.StatusOK, gin.H{"message": "verificação em duas etapas ligada"})
+}
+
+func (h *AccessHandler) TotpDisable(ctx *gin.Context) {
+	var body codeBody
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "code é obrigatório"})
+		return
+	}
+	if err := h.service.DisableTotp(currentUser(ctx).Id, body.Password, body.Code); err != nil {
+		h.audit(ctx, access_service.Audit2FADisabled, currentUser(ctx).Username, err.Error(), false)
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	h.audit(ctx, access_service.Audit2FADisabled, currentUser(ctx).Username, "", true)
+	ctx.JSON(http.StatusOK, gin.H{"message": "verificação em duas etapas desligada"})
 }
 
 // ── instâncias (escopo por grupo) ────────────────────────────────
@@ -248,6 +416,7 @@ func (h *AccessHandler) CreateInstance(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	h.audit(ctx, access_service.AuditInstanceCreate, inst.Name, inst.Id, true)
 	ctx.JSON(http.StatusCreated, gin.H{"data": inst})
 }
 
@@ -268,6 +437,7 @@ func (h *AccessHandler) DeleteInstance(ctx *gin.Context) {
 		return
 	}
 	_ = h.service.UnlinkInstanceEverywhere(instanceId)
+	h.audit(ctx, access_service.AuditInstanceDelete, instanceId, "", true)
 	ctx.JSON(http.StatusOK, gin.H{"message": "instância removida"})
 }
 
@@ -282,26 +452,35 @@ func (h *AccessHandler) AdminListUsers(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, gin.H{"data": users})
 }
 
-type adminCreateUserBody struct {
-	Username    string   `json:"username" binding:"required"`
-	Password    string   `json:"password" binding:"required"`
-	DisplayName string   `json:"displayName"`
-	Role        string   `json:"role"`
-	GroupIds    []string `json:"groupIds"`
-}
-
 func (h *AccessHandler) AdminCreateUser(ctx *gin.Context) {
-	var body adminCreateUserBody
-	if err := ctx.ShouldBindJSON(&body); err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "username e password são obrigatórios"})
+	var body access_service.CreateUserInput
+	if err := ctx.ShouldBindJSON(&body); err != nil || body.Password == "" {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "usuário ou e-mail, e senha, são obrigatórios"})
 		return
 	}
-	user, err := h.service.CreateUser(body.Username, body.Password, body.DisplayName, body.Role, body.GroupIds)
+	user, err := h.service.CreateUser(body)
 	if err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	h.audit(ctx, access_service.AuditUserCreated, user.Username, "papel "+user.Role, true)
 	ctx.JSON(http.StatusCreated, gin.H{"data": user})
+}
+
+func (h *AccessHandler) AdminUpdateUser(ctx *gin.Context) {
+	var body access_service.UpdateUserInput
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "dados inválidos"})
+		return
+	}
+	user, err := h.service.UpdateUser(ctx.Param("userId"), body, currentUser(ctx).Id)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	detail := fmt.Sprintf("papel=%s ativo=%t vêTodas=%t", user.Role, user.Active, user.SeeAllInstances)
+	h.audit(ctx, access_service.AuditUserUpdated, user.Username, detail, true)
+	ctx.JSON(http.StatusOK, gin.H{"data": user})
 }
 
 type groupIdsBody struct {
@@ -318,6 +497,7 @@ func (h *AccessHandler) AdminSetUserGroups(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	h.audit(ctx, access_service.AuditUserGroups, h.usernameOf(ctx.Param("userId")), strings.Join(body.GroupIds, ","), true)
 	ctx.JSON(http.StatusOK, gin.H{"message": "grupos atualizados"})
 }
 
@@ -335,19 +515,53 @@ func (h *AccessHandler) AdminResetPassword(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	h.audit(ctx, access_service.AuditPasswordReset, h.usernameOf(ctx.Param("userId")), "sessões encerradas", true)
 	ctx.JSON(http.StatusOK, gin.H{"message": "senha redefinida (troca obrigatória no próximo login)"})
 }
 
-func (h *AccessHandler) AdminDeleteUser(ctx *gin.Context) {
-	if ctx.Param("userId") == currentUser(ctx).Id {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "não é possível excluir o próprio usuário"})
-		return
-	}
-	if err := h.service.DeleteUser(ctx.Param("userId")); err != nil {
+func (h *AccessHandler) AdminResetTotp(ctx *gin.Context) {
+	if err := h.service.AdminResetTotp(ctx.Param("userId")); err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	h.audit(ctx, access_service.Audit2FAReset, h.usernameOf(ctx.Param("userId")), "", true)
+	ctx.JSON(http.StatusOK, gin.H{"message": "verificação em duas etapas removida; o usuário pode configurar de novo"})
+}
+
+func (h *AccessHandler) AdminUserSessions(ctx *gin.Context) {
+	list, err := h.service.ListSessions(ctx.Param("userId"), currentSessionId(ctx))
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"data": list})
+}
+
+func (h *AccessHandler) AdminRevokeSession(ctx *gin.Context) {
+	sess, err := h.service.RevokeSession(ctx.Param("sessionId"))
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	h.audit(ctx, access_service.AuditSessionRevoked, h.usernameOf(sess.UserId), "pelo admin, IP "+sess.IP, true)
+	ctx.JSON(http.StatusOK, gin.H{"message": "sessão encerrada"})
+}
+
+func (h *AccessHandler) AdminDeleteUser(ctx *gin.Context) {
+	name := h.usernameOf(ctx.Param("userId"))
+	if err := h.service.DeleteUser(ctx.Param("userId"), currentUser(ctx).Id); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	h.audit(ctx, access_service.AuditUserDeleted, name, "", true)
 	ctx.JSON(http.StatusOK, gin.H{"message": "usuário removido"})
+}
+
+func (h *AccessHandler) usernameOf(userId string) string {
+	if u, err := h.service.GetUser(userId); err == nil {
+		return u.Username
+	}
+	return userId
 }
 
 // ── admin: groups ────────────────────────────────────────────────
@@ -377,6 +591,7 @@ func (h *AccessHandler) AdminCreateGroup(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	h.audit(ctx, access_service.AuditGroupCreated, group.Name, body.LdapGroupDN, true)
 	ctx.JSON(http.StatusCreated, gin.H{"data": group})
 }
 
@@ -385,6 +600,7 @@ func (h *AccessHandler) AdminDeleteGroup(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	h.audit(ctx, access_service.AuditGroupDeleted, ctx.Param("groupId"), "", true)
 	ctx.JSON(http.StatusOK, gin.H{"message": "grupo removido"})
 }
 
@@ -394,14 +610,18 @@ func (h *AccessHandler) AdminRegenerateGroupApiKey(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	h.audit(ctx, access_service.AuditGroupKey, group.Name, "", true)
 	ctx.JSON(http.StatusOK, gin.H{"data": group})
 }
 
+// AdminLinkInstance: compartilha a instância com um grupo — todos os membros
+// do grupo passam a ver e usar a instância.
 func (h *AccessHandler) AdminLinkInstance(ctx *gin.Context) {
 	if err := h.service.LinkInstance(ctx.Param("groupId"), ctx.Param("instanceId")); err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	h.audit(ctx, access_service.AuditInstanceShared, ctx.Param("instanceId"), "grupo "+ctx.Param("groupId"), true)
 	ctx.JSON(http.StatusOK, gin.H{"message": "instância vinculada ao grupo"})
 }
 
@@ -410,7 +630,39 @@ func (h *AccessHandler) AdminUnlinkInstance(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	h.audit(ctx, access_service.AuditInstanceUnshar, ctx.Param("instanceId"), "grupo "+ctx.Param("groupId"), true)
 	ctx.JSON(http.StatusOK, gin.H{"message": "vínculo removido"})
+}
+
+// AdminInstanceGroups: com quais grupos a instância está compartilhada.
+func (h *AccessHandler) AdminInstanceGroups(ctx *gin.Context) {
+	ids, err := h.service.GroupIdsForInstance(ctx.Param("instanceId"))
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if ids == nil {
+		ids = []string{}
+	}
+	ctx.JSON(http.StatusOK, gin.H{"data": ids})
+}
+
+// ── admin: auditoria ─────────────────────────────────────────────
+
+func (h *AccessHandler) AdminAudit(ctx *gin.Context) {
+	limit, _ := strconv.Atoi(ctx.DefaultQuery("limit", "100"))
+	offset, _ := strconv.Atoi(ctx.DefaultQuery("offset", "0"))
+	list, total, err := h.service.ListAudit(access_repository.AuditFilter{
+		Username: ctx.Query("username"),
+		Action:   ctx.Query("action"),
+		Limit:    limit,
+		Offset:   offset,
+	})
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"data": list, "total": total})
 }
 
 // ── admin: settings ──────────────────────────────────────────────
@@ -438,6 +690,11 @@ func (h *AccessHandler) AdminSetSetting(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	detail := body.Value
+	if strings.Contains(ctx.Param("key"), "password") {
+		detail = "(segredo)"
+	}
+	h.audit(ctx, access_service.AuditSettingChanged, ctx.Param("key"), detail, true)
 	ctx.JSON(http.StatusOK, gin.H{"message": "configuração salva"})
 }
 
@@ -520,4 +777,25 @@ func (h *AccessHandler) AdminTestLdap(ctx *gin.Context) {
 		return
 	}
 	ctx.JSON(http.StatusOK, gin.H{"message": "conexão LDAP bem-sucedida"})
+}
+
+type ldapUserTestBody struct {
+	Username string `json:"username" binding:"required"`
+	Password string `json:"password" binding:"required"`
+}
+
+// AdminTestLdapUser: autentica um usuário real no AD (sem criar nada) e
+// mostra os grupos e o papel que ele receberia.
+func (h *AccessHandler) AdminTestLdapUser(ctx *gin.Context) {
+	var body ldapUserTestBody
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "username e password são obrigatórios"})
+		return
+	}
+	res, err := h.service.TestLdapUser(body.Username, body.Password)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"data": res})
 }

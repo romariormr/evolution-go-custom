@@ -20,9 +20,33 @@ const useAuthStore = create<AuthStore>()(
 
       loginWithPassword: async (apiUrl, username, password) => {
         const cleanUrl = apiUrl.replace(/\/$/, '');
-        const response = await apiClient.post<LoginResponse>(
+        const response = await apiClient.post<LoginResponse & { twoFactorRequired?: boolean; challenge?: string }>(
           '/access/login',
           { username, password },
+          { baseURL: cleanUrl, withCredentials: true },
+        );
+        if (response.data.twoFactorRequired && response.data.challenge) {
+          set({ apiUrl: cleanUrl });
+          return { twoFactorRequired: true, challenge: response.data.challenge };
+        }
+        const { token, user } = response.data;
+        set({
+          apiUrl: cleanUrl,
+          apiKey: '',
+          token,
+          user,
+          authMode: 'session',
+          isAuthenticated: true,
+          licenseState: 'licensed',
+        });
+        return { twoFactorRequired: false, user };
+      },
+
+      completeTwoFactor: async (apiUrl, challenge, code) => {
+        const cleanUrl = apiUrl.replace(/\/$/, '');
+        const response = await apiClient.post<LoginResponse>(
+          '/access/login/2fa',
+          { challenge, code },
           { baseURL: cleanUrl, withCredentials: true },
         );
         const { token, user } = response.data;

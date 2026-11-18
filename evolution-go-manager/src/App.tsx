@@ -14,6 +14,7 @@ import LicenseCallback from '@/pages/LicenseCallback';
 import ApiTester from '@/pages/ApiTester';
 import Admin from '@/pages/Admin';
 import ChangePassword from '@/pages/ChangePassword';
+import Account from '@/pages/Account';
 import useAuth from '@/hooks/useAuth';
 import { DarkModeProvider } from '@/contexts/ThemeContext';
 import useBrandingStore from '@/store/brandingStore';
@@ -60,6 +61,7 @@ function App() {
               <Route path="api-tester" element={<ApiTester />} />
               <Route path="settings" element={<Settings />} />
               <Route path="admin" element={user?.role === 'admin' ? <Admin /> : <Navigate to="/manager" replace />} />
+              <Route path="account" element={user ? <Account /> : <Navigate to="/manager" replace />} />
             </Route>
             ) : (
               /* Redirect to login if not authenticated or not licensed */

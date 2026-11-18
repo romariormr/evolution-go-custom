@@ -1,14 +1,12 @@
 package access_service
 
 import (
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"net/mail"
 	"strings"
 	"time"
+	"unicode"
 
 	access_model "github.com/EvolutionAPI/evolution-go/pkg/access/model"
 	access_repository "github.com/EvolutionAPI/evolution-go/pkg/access/repository"
@@ -20,30 +18,83 @@ var (
 	ErrInvalidCredentials = errors.New("usuário ou senha inválidos")
 	ErrInvalidToken       = errors.New("sessão inválida ou expirada")
 	ErrForbidden          = errors.New("sem permissão")
+	ErrInvalidCode        = errors.New("código inválido")
+	ErrLastAdmin          = errors.New("precisa existir pelo menos um administrador ativo")
 )
 
-const sessionTTL = 12 * time.Hour
+// ErrLocked: muitas tentativas erradas; Until diz até quando.
+type ErrLocked struct{ Until time.Time }
 
-type SessionClaims struct {
-	Sub  string `json:"sub"`
-	Usr  string `json:"usr"`
-	Role string `json:"role"`
-	Iat  int64  `json:"iat"`
-	Exp  int64  `json:"exp"`
+func (e ErrLocked) Error() string {
+	return fmt.Sprintf("muitas tentativas erradas; tente de novo depois das %s", e.Until.Local().Format("15:04"))
+}
+
+const (
+	sessionTTL       = 12 * time.Hour
+	sessionTouchStep = time.Minute
+	issuerName       = "Evolution GO"
+)
+
+// ClientInfo: de onde veio a requisição (vai para a sessão e para a auditoria).
+type ClientInfo struct {
+	IP        string
+	UserAgent string
+}
+
+type LoginResult struct {
+	Token             string                    `json:"token,omitempty"`
+	User              *access_model.AccessUser  `json:"user,omitempty"`
+	Session           *access_model.AccessSession `json:"-"`
+	TwoFactorRequired bool                      `json:"twoFactorRequired,omitempty"`
+	Challenge         string                    `json:"challenge,omitempty"`
+}
+
+type CreateUserInput struct {
+	Username        string   `json:"username"`
+	Email           string   `json:"email"`
+	Password        string   `json:"password"`
+	DisplayName     string   `json:"displayName"`
+	Role            string   `json:"role"`
+	SeeAllInstances *bool    `json:"seeAllInstances"`
+	GroupIds        []string `json:"groupIds"`
+}
+
+type UpdateUserInput struct {
+	DisplayName     *string `json:"displayName"`
+	Email           *string `json:"email"`
+	Role            *string `json:"role"`
+	Active          *bool   `json:"active"`
+	SeeAllInstances *bool   `json:"seeAllInstances"`
 }
 
 type AccessService interface {
 	Bootstrap() error
-	Login(username, password string) (string, *access_model.AccessUser, error)
-	ValidateSession(token string) (*access_model.AccessUser, error)
-	ChangePassword(userId, current, newPassword string) error
+	Maintenance()
+
+	// login / sessão
+	Login(identifier, password string, ci ClientInfo) (*LoginResult, error)
+	LoginTwoFactor(challenge, code string, ci ClientInfo) (*LoginResult, error)
+	ValidateSession(token string) (*access_model.AccessUser, *access_model.AccessSession, error)
+	Logout(token string)
+	ListSessions(userId, currentSessionId string) ([]*access_model.AccessSession, error)
+	RevokeOwnSession(userId, sessionId string) error
+	RevokeSession(sessionId string) (*access_model.AccessSession, error)
+	ChangePassword(userId, current, newPassword, keepSessionId string) error
+
+	// 2FA
+	StartTotpSetup(userId string) (secret, otpauthURL string, err error)
+	EnableTotp(userId, code string) error
+	DisableTotp(userId, password, code string) error
+	AdminResetTotp(userId string) error
 
 	// admin
-	CreateUser(username, password, displayName, role string, groupIds []string) (*access_model.AccessUser, error)
+	CreateUser(in CreateUserInput) (*access_model.AccessUser, error)
+	UpdateUser(id string, in UpdateUserInput, actorId string) (*access_model.AccessUser, error)
+	GetUser(id string) (*access_model.AccessUser, error)
 	ListUsers() ([]*access_model.AccessUser, error)
 	UpdateUserGroups(userId string, groupIds []string) error
 	ResetPassword(userId, newPassword string) error
-	DeleteUser(id string) error
+	DeleteUser(id, actorId string) error
 	CreateGroup(name, ldapGroupDN string) (*access_model.AccessGroup, error)
 	ListGroups() ([]*access_model.AccessGroup, error)
 	DeleteGroup(id string) error
@@ -54,6 +105,11 @@ type AccessService interface {
 	ListSettings() (map[string]string, error)
 	SetSetting(key, value string) error
 	TestLdap() error
+	TestLdapUser(username, password string) (*LdapTestResult, error)
+
+	// auditoria
+	Audit(actor *access_model.AccessUser, ci ClientInfo, action, target, detail string, success bool)
+	ListAudit(f access_repository.AuditFilter) ([]*access_model.AccessAudit, int64, error)
 
 	// escopo
 	AllowedInstanceIds(user *access_model.AccessUser) (map[string]bool, bool, error)
@@ -62,16 +118,29 @@ type AccessService interface {
 }
 
 type accessService struct {
-	repo   access_repository.AccessRepository
-	config *config.Config
+	repo       access_repository.AccessRepository
+	config     *config.Config
+	guard      *loginGuard
+	challenges *challengeStore
 }
+
+// globalKeyForSecrets: usado por loadLdapConfig (ldap_service.go) para decifrar.
+var globalKeyForSecrets string
 
 func NewAccessService(repo access_repository.AccessRepository, cfg *config.Config) AccessService {
-	return &accessService{repo: repo, config: cfg}
+	globalKeyForSecrets = cfg.GlobalApiKey
+	return &accessService{repo: repo, config: cfg, guard: newLoginGuard(), challenges: newChallengeStore()}
 }
 
-// Bootstrap: sem usuários → cria admin com senha = GLOBAL_API_KEY (troca obrigatória).
 func (s *accessService) Bootstrap() error {
+	// Senha do LDAP gravada em texto puro por versões antigas → cifra.
+	if v, err := s.repo.GetSetting(settingLdapBindPassword); err == nil && v != "" && !strings.HasPrefix(v, encPrefix) {
+		if enc, err := encryptSecret(s.config.GlobalApiKey, v); err == nil {
+			_ = s.repo.SetSetting(settingLdapBindPassword, enc)
+			fmt.Println("[ACCESS] senha da conta de serviço do LDAP agora está cifrada no banco")
+		}
+	}
+
 	n, err := s.repo.CountUsers()
 	if err != nil {
 		return err
@@ -90,6 +159,8 @@ func (s *accessService) Bootstrap() error {
 		Role:               access_model.RoleAdmin,
 		AuthSource:         access_model.AuthSourceLocal,
 		MustChangePassword: true,
+		Active:             true,
+		SeeAllInstances:    true,
 	}
 	if err := s.repo.CreateUser(admin); err != nil {
 		return err
@@ -98,116 +169,192 @@ func (s *accessService) Bootstrap() error {
 	return nil
 }
 
-// ── sessão / JWT (HMAC-SHA256, secret = GLOBAL_API_KEY) ─────────
-
-func (s *accessService) sign(data string) string {
-	mac := hmac.New(sha256.New, []byte(s.config.GlobalApiKey))
-	mac.Write([]byte(data))
-	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
-}
-
-func (s *accessService) issueToken(u *access_model.AccessUser) (string, error) {
-	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
+// Maintenance: apaga sessões vencidas (>7 dias) e auditoria antiga (AUDIT_RETENTION_DAYS, padrão 180).
+func (s *accessService) Maintenance() {
 	now := time.Now()
-	claims := SessionClaims{
-		Sub:  u.Id,
-		Usr:  u.Username,
-		Role: u.Role,
-		Iat:  now.Unix(),
-		Exp:  now.Add(sessionTTL).Unix(),
-	}
-	body, err := json.Marshal(claims)
-	if err != nil {
-		return "", err
-	}
-	payload := base64.RawURLEncoding.EncodeToString(body)
-	unsigned := header + "." + payload
-	return unsigned + "." + s.sign(unsigned), nil
+	_ = s.repo.PurgeSessions(now.Add(-7 * 24 * time.Hour))
+	_ = s.repo.PurgeAudit(now.AddDate(0, 0, -auditRetentionDays()))
 }
 
-func (s *accessService) parseToken(token string) (*SessionClaims, error) {
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
-		return nil, ErrInvalidToken
+// ── senha ────────────────────────────────────────────────────────
+
+// validatePassword: mínimo 8 caracteres, com letra e número, diferente do usuário/e-mail.
+func validatePassword(pw, username, email string) error {
+	if len(pw) < 8 {
+		return errors.New("a senha precisa de pelo menos 8 caracteres")
 	}
-	unsigned := parts[0] + "." + parts[1]
-	expected := s.sign(unsigned)
-	if !hmac.Equal([]byte(expected), []byte(parts[2])) {
-		return nil, ErrInvalidToken
+	var letter, digit bool
+	for _, r := range pw {
+		switch {
+		case unicode.IsLetter(r):
+			letter = true
+		case unicode.IsDigit(r):
+			digit = true
+		}
 	}
-	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return nil, ErrInvalidToken
+	if !letter || !digit {
+		return errors.New("a senha precisa ter letras e números")
 	}
-	var claims SessionClaims
-	if err := json.Unmarshal(raw, &claims); err != nil {
-		return nil, ErrInvalidToken
+	low := strings.ToLower(pw)
+	if (username != "" && low == strings.ToLower(username)) || (email != "" && low == strings.ToLower(email)) {
+		return errors.New("a senha não pode ser igual ao usuário ou e-mail")
 	}
-	if time.Now().Unix() > claims.Exp {
-		return nil, ErrInvalidToken
-	}
-	return &claims, nil
+	return nil
 }
 
-func (s *accessService) Login(username, password string) (string, *access_model.AccessUser, error) {
-	username = strings.TrimSpace(strings.ToLower(username))
-	u, err := s.repo.GetUserByUsername(username)
+func normalizeEmail(email string) (string, error) {
+	email = strings.TrimSpace(strings.ToLower(email))
+	if email == "" {
+		return "", nil
+	}
+	if _, err := mail.ParseAddress(email); err != nil || !strings.Contains(email, "@") {
+		return "", errors.New("e-mail inválido")
+	}
+	return email, nil
+}
 
-	if err != nil {
-		// Usuário não existe localmente → tenta LDAP e provisiona na primeira vez.
-		return s.loginViaLdap(username, password, nil)
+// ── login ────────────────────────────────────────────────────────
+
+func (s *accessService) findUser(identifier string) (*access_model.AccessUser, error) {
+	if strings.Contains(identifier, "@") {
+		if u, err := s.repo.GetUserByEmail(identifier); err == nil {
+			return u, nil
+		}
+	}
+	return s.repo.GetUserByUsername(identifier)
+}
+
+func (s *accessService) Login(identifier, password string, ci ClientInfo) (*LoginResult, error) {
+	identifier = strings.TrimSpace(strings.ToLower(identifier))
+	now := time.Now()
+	if until := s.guard.locked(identifier, ci.IP, now); !until.IsZero() {
+		return nil, ErrLocked{Until: until}
 	}
 
-	switch u.AuthSource {
-	case access_model.AuthSourceLdap:
-		return s.loginViaLdap(username, password, u)
+	u, err := s.findUser(identifier)
+	switch {
+	case err != nil:
+		// Não existe localmente → tenta LDAP (provisiona no 1º acesso).
+		u, err = s.loginViaLdap(identifier, password, nil)
+	case u.AuthSource == access_model.AuthSourceLdap:
+		u, err = s.loginViaLdap(u.Username, password, u)
 	default:
 		if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)) != nil {
-			return "", nil, ErrInvalidCredentials
+			err = ErrInvalidCredentials
 		}
-		token, err := s.issueToken(u)
-		if err != nil {
-			return "", nil, err
-		}
-		return token, u, nil
 	}
+	if err == nil && !u.Active {
+		err = ErrInvalidCredentials
+	}
+	if err != nil {
+		s.guard.fail(identifier, ci.IP, now)
+		return nil, ErrInvalidCredentials
+	}
+	s.guard.success(identifier, ci.IP)
+
+	if u.TotpEnabled {
+		return &LoginResult{TwoFactorRequired: true, Challenge: s.challenges.put(u.Id, identifier)}, nil
+	}
+	return s.openSession(u, ci)
 }
 
-// loginViaLdap autentica no AD e, se sucesso, cria (1ª vez) ou atualiza o usuário local
-// e sincroniza os grupos evo-go a partir do memberOf mapeado em AccessGroup.LdapGroupDN.
-// existing == nil significa "usuário ainda não existe localmente".
-func (s *accessService) loginViaLdap(username, password string, existing *access_model.AccessUser) (string, *access_model.AccessUser, error) {
-	_, displayName, groupDNs, err := AuthenticateLdap(s.repo, username, password)
-	if err != nil {
-		return "", nil, ErrInvalidCredentials
+func (s *accessService) LoginTwoFactor(chal, code string, ci ClientInfo) (*LoginResult, error) {
+	c, ok := s.challenges.take(chal)
+	if !ok {
+		return nil, errors.New("o tempo para digitar o código acabou; entre de novo")
 	}
+	now := time.Now()
+	if until := s.guard.locked(c.identifier, ci.IP, now); !until.IsZero() {
+		s.challenges.drop(chal)
+		return nil, ErrLocked{Until: until}
+	}
+	u, err := s.repo.GetUserById(c.userId)
+	if err != nil || !u.Active || !u.TotpEnabled {
+		s.challenges.drop(chal)
+		return nil, ErrInvalidCredentials
+	}
+	secret, err := decryptSecret(s.config.GlobalApiKey, u.TotpSecret)
+	if err != nil || !verifyTotp(u.Id, secret, code, now) {
+		s.guard.fail(c.identifier, ci.IP, now)
+		return nil, ErrInvalidCode
+	}
+	s.challenges.drop(chal)
+	s.guard.success(c.identifier, ci.IP)
+	return s.openSession(u, ci)
+}
+
+func (s *accessService) openSession(u *access_model.AccessUser, ci ClientInfo) (*LoginResult, error) {
+	token := randomToken(32)
+	now := time.Now()
+	sess := &access_model.AccessSession{
+		UserId:     u.Id,
+		TokenHash:  hashToken(token),
+		IP:         ci.IP,
+		UserAgent:  clipStr(ci.UserAgent, 300),
+		LastSeenAt: now,
+		ExpiresAt:  now.Add(sessionTTL),
+	}
+	if err := s.repo.CreateSession(sess); err != nil {
+		return nil, err
+	}
+	u.LastLoginAt = &now
+	_ = s.repo.UpdateUser(u)
+	return &LoginResult{Token: token, User: u, Session: sess}, nil
+}
+
+// loginViaLdap autentica no AD e cria (1ª vez) ou atualiza o usuário local,
+// sincronizando grupos (memberOf ↔ AccessGroup.LdapGroupDN) e, se
+// ldap.admin_group_dn estiver configurado, o papel de admin.
+func (s *accessService) loginViaLdap(username, password string, existing *access_model.AccessUser) (*access_model.AccessUser, error) {
+	_, displayName, groupDNs, email, err := AuthenticateLdap(s.repo, username, password)
+	if err != nil {
+		return nil, ErrInvalidCredentials
+	}
+	adminDN, _ := s.repo.GetSetting(settingLdapAdminGroupDN)
 
 	u := existing
 	if u == nil {
 		u = &access_model.AccessUser{
-			Username:    username,
-			DisplayName: displayName,
-			Role:        access_model.RoleUser,
-			AuthSource:  access_model.AuthSourceLdap,
+			Username:        username,
+			DisplayName:     displayName,
+			Email:           strings.ToLower(email),
+			Role:            access_model.RoleUser,
+			AuthSource:      access_model.AuthSourceLdap,
+			Active:          true,
+			SeeAllInstances: true,
+		}
+		if adminDN != "" && matchGroupDNs(groupDNs, adminDN) {
+			u.Role = access_model.RoleAdmin
 		}
 		if err := s.repo.CreateUser(u); err != nil {
-			return "", nil, err
+			return nil, err
 		}
-	} else if displayName != "" && displayName != u.DisplayName {
-		u.DisplayName = displayName
-		_ = s.repo.UpdateUser(u)
+	} else {
+		changed := false
+		if displayName != "" && displayName != u.DisplayName {
+			u.DisplayName, changed = displayName, true
+		}
+		if email != "" && u.Email == "" {
+			u.Email, changed = strings.ToLower(email), true
+		}
+		if adminDN != "" {
+			role := access_model.RoleUser
+			if matchGroupDNs(groupDNs, adminDN) {
+				role = access_model.RoleAdmin
+			}
+			if role != u.Role {
+				u.Role, changed = role, true
+			}
+		}
+		if changed {
+			_ = s.repo.UpdateUser(u)
+		}
 	}
 
 	if err := s.syncLdapGroups(u.Id, groupDNs); err != nil {
 		fmt.Printf("[ACCESS][LDAP] falha ao sincronizar grupos de %s: %v\n", username, err)
 	}
-
-	token, err := s.issueToken(u)
-	if err != nil {
-		return "", nil, err
-	}
-	u, _ = s.repo.GetUserById(u.Id) // recarrega com grupos atualizados
-	return token, u, nil
+	return s.repo.GetUserById(u.Id)
 }
 
 // syncLdapGroups vincula o usuário a todo AccessGroup cujo LdapGroupDN bate com algum memberOf do AD.
@@ -225,28 +372,76 @@ func (s *accessService) syncLdapGroups(userId string, groupDNs []string) error {
 	return s.repo.SetUserGroups(userId, matched)
 }
 
-func (s *accessService) ValidateSession(token string) (*access_model.AccessUser, error) {
-	claims, err := s.parseToken(token)
+// ── sessão ───────────────────────────────────────────────────────
+
+func (s *accessService) ValidateSession(token string) (*access_model.AccessUser, *access_model.AccessSession, error) {
+	if token == "" {
+		return nil, nil, ErrInvalidToken
+	}
+	sess, err := s.repo.GetSessionByHash(hashToken(token))
+	if err != nil || sess.RevokedAt != nil || time.Now().After(sess.ExpiresAt) {
+		return nil, nil, ErrInvalidToken
+	}
+	u, err := s.repo.GetUserById(sess.UserId)
+	if err != nil || !u.Active {
+		return nil, nil, ErrInvalidToken
+	}
+	if now := time.Now(); now.Sub(sess.LastSeenAt) > sessionTouchStep {
+		_ = s.repo.TouchSession(sess.Id, now)
+		sess.LastSeenAt = now
+	}
+	return u, sess, nil
+}
+
+func (s *accessService) Logout(token string) {
+	if token == "" {
+		return
+	}
+	if sess, err := s.repo.GetSessionByHash(hashToken(token)); err == nil {
+		_ = s.repo.RevokeSession(sess.Id)
+	}
+}
+
+func (s *accessService) ListSessions(userId, currentSessionId string) ([]*access_model.AccessSession, error) {
+	list, err := s.repo.ListSessions(userId)
 	if err != nil {
 		return nil, err
 	}
-	u, err := s.repo.GetUserById(claims.Sub)
-	if err != nil {
-		return nil, ErrInvalidToken
+	for _, x := range list {
+		x.Current = x.Id == currentSessionId
 	}
-	return u, nil
+	return list, nil
 }
 
-func (s *accessService) ChangePassword(userId, current, newPassword string) error {
+func (s *accessService) RevokeOwnSession(userId, sessionId string) error {
+	sess, err := s.repo.GetSession(sessionId)
+	if err != nil || sess.UserId != userId {
+		return ErrForbidden
+	}
+	return s.repo.RevokeSession(sessionId)
+}
+
+func (s *accessService) RevokeSession(sessionId string) (*access_model.AccessSession, error) {
+	sess, err := s.repo.GetSession(sessionId)
+	if err != nil {
+		return nil, err
+	}
+	return sess, s.repo.RevokeSession(sessionId)
+}
+
+func (s *accessService) ChangePassword(userId, current, newPassword, keepSessionId string) error {
 	u, err := s.repo.GetUserById(userId)
 	if err != nil {
 		return ErrInvalidCredentials
 	}
+	if u.AuthSource == access_model.AuthSourceLdap {
+		return errors.New("usuário do AD: troque a senha no Active Directory")
+	}
 	if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(current)) != nil {
 		return ErrInvalidCredentials
 	}
-	if len(newPassword) < 8 {
-		return errors.New("nova senha precisa de pelo menos 8 caracteres")
+	if err := validatePassword(newPassword, u.Username, u.Email); err != nil {
+		return err
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
 	if err != nil {
@@ -254,42 +449,206 @@ func (s *accessService) ChangePassword(userId, current, newPassword string) erro
 	}
 	u.PasswordHash = string(hash)
 	u.MustChangePassword = false
+	if err := s.repo.UpdateUser(u); err != nil {
+		return err
+	}
+	// Senha nova: derruba as outras sessões abertas (fica só esta).
+	return s.repo.RevokeUserSessions(u.Id, keepSessionId)
+}
+
+// ── 2FA ──────────────────────────────────────────────────────────
+
+func (s *accessService) StartTotpSetup(userId string) (string, string, error) {
+	u, err := s.repo.GetUserById(userId)
+	if err != nil {
+		return "", "", err
+	}
+	if u.TotpEnabled {
+		return "", "", errors.New("a verificação em duas etapas já está ligada")
+	}
+	secret := newTotpSecret()
+	enc, err := encryptSecret(s.config.GlobalApiKey, secret)
+	if err != nil {
+		return "", "", err
+	}
+	u.TotpPendingSecret = enc
+	if err := s.repo.UpdateUser(u); err != nil {
+		return "", "", err
+	}
+	account := u.Username
+	if u.Email != "" {
+		account = u.Email
+	}
+	return secret, totpURL(issuerName, account, secret), nil
+}
+
+func (s *accessService) EnableTotp(userId, code string) error {
+	u, err := s.repo.GetUserById(userId)
+	if err != nil {
+		return err
+	}
+	if u.TotpPendingSecret == "" {
+		return errors.New("comece a configuração de novo")
+	}
+	secret, err := decryptSecret(s.config.GlobalApiKey, u.TotpPendingSecret)
+	if err != nil {
+		return err
+	}
+	if !verifyTotp(u.Id, secret, code, time.Now()) {
+		return ErrInvalidCode
+	}
+	u.TotpSecret = u.TotpPendingSecret
+	u.TotpPendingSecret = ""
+	u.TotpEnabled = true
 	return s.repo.UpdateUser(u)
+}
+
+func (s *accessService) DisableTotp(userId, password, code string) error {
+	u, err := s.repo.GetUserById(userId)
+	if err != nil {
+		return err
+	}
+	if !u.TotpEnabled {
+		return nil
+	}
+	if u.AuthSource == access_model.AuthSourceLocal && bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)) != nil {
+		return ErrInvalidCredentials
+	}
+	secret, err := decryptSecret(s.config.GlobalApiKey, u.TotpSecret)
+	if err != nil || !verifyTotp(u.Id, secret, code, time.Now()) {
+		return ErrInvalidCode
+	}
+	u.TotpEnabled, u.TotpSecret, u.TotpPendingSecret = false, "", ""
+	return s.repo.UpdateUser(u)
+}
+
+func (s *accessService) AdminResetTotp(userId string) error {
+	u, err := s.repo.GetUserById(userId)
+	if err != nil {
+		return err
+	}
+	u.TotpEnabled, u.TotpSecret, u.TotpPendingSecret = false, "", ""
+	if err := s.repo.UpdateUser(u); err != nil {
+		return err
+	}
+	return s.repo.RevokeUserSessions(u.Id, "")
 }
 
 // ── admin CRUD ───────────────────────────────────────────────────
 
-func (s *accessService) CreateUser(username, password, displayName, role string, groupIds []string) (*access_model.AccessUser, error) {
-	username = strings.TrimSpace(strings.ToLower(username))
-	if username == "" || len(password) < 8 {
-		return nil, errors.New("username obrigatório e senha com pelo menos 8 caracteres")
+func (s *accessService) CreateUser(in CreateUserInput) (*access_model.AccessUser, error) {
+	username := strings.TrimSpace(strings.ToLower(in.Username))
+	email, err := normalizeEmail(in.Email)
+	if err != nil {
+		return nil, err
 	}
-	if role != access_model.RoleAdmin {
-		role = access_model.RoleUser
+	if username == "" {
+		username = email // perfil criado só com e-mail: o e-mail vira o usuário
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if username == "" {
+		return nil, errors.New("informe usuário ou e-mail")
+	}
+	if email != "" {
+		if _, err := s.repo.GetUserByEmail(email); err == nil {
+			return nil, errors.New("já existe um usuário com esse e-mail")
+		}
+	}
+	if _, err := s.repo.GetUserByUsername(username); err == nil {
+		return nil, errors.New("já existe um usuário com esse nome")
+	}
+	if err := validatePassword(in.Password, username, email); err != nil {
+		return nil, err
+	}
+	role := access_model.RoleUser
+	if in.Role == access_model.RoleAdmin {
+		role = access_model.RoleAdmin
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(in.Password), bcrypt.DefaultCost)
 	if err != nil {
 		return nil, err
 	}
 	u := &access_model.AccessUser{
-		Username:     username,
-		PasswordHash: string(hash),
-		DisplayName:  displayName,
-		Role:         role,
-		AuthSource:   access_model.AuthSourceLocal,
+		Username:           username,
+		Email:              email,
+		PasswordHash:       string(hash),
+		DisplayName:        strings.TrimSpace(in.DisplayName),
+		Role:               role,
+		AuthSource:         access_model.AuthSourceLocal,
+		MustChangePassword: true,
+		Active:             true,
+		SeeAllInstances:    true,
 	}
 	if err := s.repo.CreateUser(u); err != nil {
 		return nil, err
 	}
-	if len(groupIds) > 0 {
-		if err := s.repo.SetUserGroups(u.Id, groupIds); err != nil {
+	// GORM aplica default:true em bool false na criação; o false vai num update.
+	if in.SeeAllInstances != nil && !*in.SeeAllInstances {
+		u.SeeAllInstances = false
+		if err := s.repo.UpdateUser(u); err != nil {
+			return nil, err
+		}
+	}
+	if len(in.GroupIds) > 0 {
+		if err := s.repo.SetUserGroups(u.Id, in.GroupIds); err != nil {
 			return nil, err
 		}
 	}
 	return s.repo.GetUserById(u.Id)
 }
 
-func (s *accessService) ListUsers() ([]*access_model.AccessUser, error) { return s.repo.ListUsers() }
+func (s *accessService) UpdateUser(id string, in UpdateUserInput, actorId string) (*access_model.AccessUser, error) {
+	u, err := s.repo.GetUserById(id)
+	if err != nil {
+		return nil, err
+	}
+	wasActiveAdmin := u.Role == access_model.RoleAdmin && u.Active
+	if in.DisplayName != nil {
+		u.DisplayName = strings.TrimSpace(*in.DisplayName)
+	}
+	if in.Email != nil {
+		email, err := normalizeEmail(*in.Email)
+		if err != nil {
+			return nil, err
+		}
+		if email != "" && email != u.Email {
+			if other, err := s.repo.GetUserByEmail(email); err == nil && other.Id != u.Id {
+				return nil, errors.New("já existe um usuário com esse e-mail")
+			}
+		}
+		u.Email = email
+	}
+	if in.Role != nil {
+		if *in.Role == access_model.RoleAdmin {
+			u.Role = access_model.RoleAdmin
+		} else {
+			u.Role = access_model.RoleUser
+		}
+	}
+	if in.Active != nil {
+		u.Active = *in.Active
+	}
+	if in.SeeAllInstances != nil {
+		u.SeeAllInstances = *in.SeeAllInstances
+	}
+	if id == actorId && (!u.Active || u.Role != access_model.RoleAdmin) {
+		return nil, errors.New("você não pode desativar nem tirar o admin do próprio usuário")
+	}
+	if wasActiveAdmin && (!u.Active || u.Role != access_model.RoleAdmin) {
+		if n, err := s.repo.CountActiveAdmins(); err == nil && n <= 1 {
+			return nil, ErrLastAdmin
+		}
+	}
+	if err := s.repo.UpdateUser(u); err != nil {
+		return nil, err
+	}
+	if !u.Active {
+		_ = s.repo.RevokeUserSessions(u.Id, "")
+	}
+	return s.repo.GetUserById(u.Id)
+}
+
+func (s *accessService) GetUser(id string) (*access_model.AccessUser, error) { return s.repo.GetUserById(id) }
+func (s *accessService) ListUsers() ([]*access_model.AccessUser, error)     { return s.repo.ListUsers() }
 
 func (s *accessService) UpdateUserGroups(userId string, groupIds []string) error {
 	if _, err := s.repo.GetUserById(userId); err != nil {
@@ -299,11 +658,14 @@ func (s *accessService) UpdateUserGroups(userId string, groupIds []string) error
 }
 
 func (s *accessService) ResetPassword(userId, newPassword string) error {
-	if len(newPassword) < 8 {
-		return errors.New("senha precisa de pelo menos 8 caracteres")
-	}
 	u, err := s.repo.GetUserById(userId)
 	if err != nil {
+		return err
+	}
+	if u.AuthSource == access_model.AuthSourceLdap {
+		return errors.New("usuário do AD: a senha é a do Active Directory")
+	}
+	if err := validatePassword(newPassword, u.Username, u.Email); err != nil {
 		return err
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
@@ -312,10 +674,28 @@ func (s *accessService) ResetPassword(userId, newPassword string) error {
 	}
 	u.PasswordHash = string(hash)
 	u.MustChangePassword = true
-	return s.repo.UpdateUser(u)
+	if err := s.repo.UpdateUser(u); err != nil {
+		return err
+	}
+	return s.repo.RevokeUserSessions(u.Id, "")
 }
 
-func (s *accessService) DeleteUser(id string) error { return s.repo.DeleteUser(id) }
+func (s *accessService) DeleteUser(id, actorId string) error {
+	if id == actorId {
+		return errors.New("não é possível excluir o próprio usuário")
+	}
+	u, err := s.repo.GetUserById(id)
+	if err != nil {
+		return err
+	}
+	if u.Role == access_model.RoleAdmin && u.Active {
+		if n, err := s.repo.CountActiveAdmins(); err == nil && n <= 1 {
+			return ErrLastAdmin
+		}
+	}
+	_ = s.repo.RevokeUserSessions(id, "")
+	return s.repo.DeleteUser(id)
+}
 
 func (s *accessService) CreateGroup(name, ldapGroupDN string) (*access_model.AccessGroup, error) {
 	name = strings.TrimSpace(name)
@@ -350,15 +730,57 @@ func (s *accessService) GroupIdsForInstance(instanceId string) ([]string, error)
 	return s.repo.GroupIdsForInstance(instanceId)
 }
 
-func (s *accessService) ListSettings() (map[string]string, error) { return s.repo.ListSettings() }
-func (s *accessService) SetSetting(key, value string) error       { return s.repo.SetSetting(key, value) }
-func (s *accessService) TestLdap() error                          { return TestLdapSettings(s.repo) }
+// ── settings ─────────────────────────────────────────────────────
+
+// secretSettings: nunca saem em claro pela API e ficam cifrados no banco.
+var secretSettings = map[string]bool{settingLdapBindPassword: true}
+
+const maskedSecret = "********"
+
+func (s *accessService) ListSettings() (map[string]string, error) {
+	all, err := s.repo.ListSettings()
+	if err != nil {
+		return nil, err
+	}
+	for k := range secretSettings {
+		if all[k] != "" {
+			all[k] = maskedSecret
+		}
+	}
+	return all, nil
+}
+
+func (s *accessService) SetSetting(key, value string) error {
+	key = strings.TrimSpace(key)
+	if !(strings.HasPrefix(key, "ldap.") || strings.HasPrefix(key, "branding.")) {
+		return errors.New("configuração desconhecida")
+	}
+	if secretSettings[key] {
+		if value == maskedSecret {
+			return nil // tela devolveu a máscara: mantém o valor atual
+		}
+		enc, err := encryptSecret(s.config.GlobalApiKey, value)
+		if err != nil {
+			return err
+		}
+		value = enc
+	}
+	return s.repo.SetSetting(key, value)
+}
+
+func (s *accessService) TestLdap() error { return TestLdapSettings(s.repo) }
+
+func (s *accessService) TestLdapUser(username, password string) (*LdapTestResult, error) {
+	return TestLdapUserLogin(s.repo, username, password)
+}
 
 // ── escopo por grupo ─────────────────────────────────────────────
 
-// AllowedInstanceIds: (ids permitidos, éAdmin). Admin → mapa nil e true (sem filtro).
+// AllowedInstanceIds: (ids permitidos, vêTudo). Admin com SeeAllInstances →
+// mapa nil e true (sem filtro). Admin sem SeeAllInstances e usuário comum →
+// só as instâncias dos grupos dele.
 func (s *accessService) AllowedInstanceIds(user *access_model.AccessUser) (map[string]bool, bool, error) {
-	if user == nil || user.Role == access_model.RoleAdmin {
+	if user == nil || (user.Role == access_model.RoleAdmin && user.SeeAllInstances) {
 		return nil, true, nil
 	}
 	groupIds, err := s.repo.GroupIdsForUser(user.Id)
@@ -381,7 +803,13 @@ func (s *accessService) AllowedInstanceIds(user *access_model.AccessUser) (map[s
 func (s *accessService) LinkInstanceToUserGroups(user *access_model.AccessUser, instanceId string, groupId string) error {
 	if user == nil || user.Role == access_model.RoleAdmin {
 		if groupId == "" {
-			return nil // admin sem grupo → instância sem dono (visível só p/ admins)
+			if user != nil && !user.SeeAllInstances {
+				// admin que só vê os próprios grupos: sem grupo, a instância sumiria da tela dele
+				if ids, _ := s.repo.GroupIdsForUser(user.Id); len(ids) > 0 {
+					return s.LinkInstance(ids[0], instanceId)
+				}
+			}
+			return nil // admin sem grupo → instância sem dono (visível só p/ admins que veem tudo)
 		}
 		return s.LinkInstance(groupId, instanceId)
 	}
@@ -411,4 +839,11 @@ func (s *accessService) LinkInstanceToUserGroups(user *access_model.AccessUser, 
 
 func (s *accessService) UnlinkInstanceEverywhere(instanceId string) error {
 	return s.repo.UnlinkInstanceEverywhere(instanceId)
+}
+
+func clipStr(v string, n int) string {
+	if len(v) <= n {
+		return v
+	}
+	return v[:n]
 }

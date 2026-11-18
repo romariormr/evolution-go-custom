@@ -1,13 +1,38 @@
 import apiClient from './client';
-import type { AccessGroup, AccessUser } from '@/types/auth';
+import type { AccessAudit, AccessGroup, AccessSession, AccessUser } from '@/types/auth';
 import type { Instance, RawInstance } from '@/types/instance';
 
 const data = <T>(response: { data: { data: T } }) => response.data.data;
 
 export const listUsers = async () => data<AccessUser[]>(await apiClient.get('/access/admin/users'));
 export const createUser = async (payload: {
-  username: string; password: string; displayName: string; role: string; groupIds: string[];
+  username: string; email: string; password: string; displayName: string; role: string;
+  seeAllInstances: boolean; groupIds: string[];
 }) => data<AccessUser>(await apiClient.post('/access/admin/users', payload));
+export const updateUser = async (userId: string, payload: {
+  displayName?: string; email?: string; role?: string; active?: boolean; seeAllInstances?: boolean;
+}) => data<AccessUser>(await apiClient.put(`/access/admin/users/${userId}`, payload));
+export const resetUserTotp = (userId: string) => apiClient.post(`/access/admin/users/${userId}/2fa/reset`);
+export const listUserSessions = async (userId: string) =>
+  data<AccessSession[]>(await apiClient.get(`/access/admin/users/${userId}/sessions`));
+export const revokeSession = (sessionId: string) => apiClient.delete(`/access/admin/sessions/${sessionId}`);
+export const instanceGroups = async (instanceId: string) =>
+  data<string[]>(await apiClient.get(`/access/admin/instances/${instanceId}/groups`));
+export const listAudit = async (params: { username?: string; action?: string; limit?: number; offset?: number }) => {
+  const response = await apiClient.get<{ data: AccessAudit[]; total: number }>('/access/admin/audit', { params });
+  return response.data;
+};
+export const testLdapUser = async (username: string, password: string) =>
+  data<{ dn: string; displayName: string; email: string; memberOf: string[]; matchedGroups: string[]; wouldBeAdmin: boolean }>(
+    await apiClient.post('/access/admin/settings/ldap/test-user', { username, password }));
+
+// Minha conta
+export const mySessions = async () => data<AccessSession[]>(await apiClient.get('/access/me/sessions'));
+export const revokeMySession = (sessionId: string) => apiClient.delete(`/access/me/sessions/${sessionId}`);
+export const startTotpSetup = async () =>
+  (await apiClient.post<{ secret: string; otpauthUrl: string; qrCode: string }>('/access/me/2fa/setup')).data;
+export const enableTotp = (code: string) => apiClient.post('/access/me/2fa/enable', { code });
+export const disableTotp = (password: string, code: string) => apiClient.post('/access/me/2fa/disable', { password, code });
 export const setUserGroups = (userId: string, groupIds: string[]) =>
   apiClient.put(`/access/admin/users/${userId}/groups`, { groupIds });
 export const resetUserPassword = (userId: string, password: string) =>
