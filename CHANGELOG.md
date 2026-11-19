@@ -1,5 +1,13 @@
 # Evolution GO - Changelog
 
+## v0.17.1
+
+Ajustes achados ao validar a v0.17.0 no HML (Swarm + Traefik + Postgres compartilhado).
+
+- **QR de pareamento não vai mais para o log.** O evento `*events.QR` caía no "Unhandled event" e era logado inteiro em WARN (os códigos de pareamento). Agora é ignorado ali (o QR continua saindo pelo canal normal/endpoint `/instance/qr`). Outros eventos não tratados passam a ser logados só pelo tipo, em DEBUG, sem o conteúdo.
+- **NATS desligado não gera erro no boot.** Sem `NATS_URL` o app não tenta mais conectar em `127.0.0.1:4222` (`[ERR] Failed to connect to NATS`) e não escreve log a cada evento.
+- **Stack (`deploy/portainer-stack.yml`):** `GIN_MODE=release` (some a lista de rotas `[GIN-debug]` a cada boot), `WADEBUG` configurável, redirecionamento de `/` para `/manager` no Traefik, aviso de que o bucket do MinIO precisa existir.
+
 ## v0.17.0
 
 ### Acesso ao Manager: perfis, sessões, 2FA e auditoria
