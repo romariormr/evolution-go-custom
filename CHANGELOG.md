@@ -1,5 +1,14 @@
 # Evolution GO - Changelog
 
+## v0.17.2
+
+Mais vazamentos de dados no log do container (stdout), achados no HML:
+
+- **Código do QR** era impresso com `fmt.Println("QR code: ...")` a cada QR gerado — quem lia o log do container conseguia parear um celular na instância. Removido (a contagem "QR code generated #N" continua).
+- **URLs assinadas do MinIO** (válidas por 7 dias, dão acesso à mídia) eram impressas a cada upload. Removido.
+- **vCard completo** (nome, telefone, empresa) era impresso a cada envio de contato. Removido.
+- **`[POLL DEBUG]`** com remetente de cada voto de enquete. Removido.
+
 ## v0.17.1
 
 Ajustes achados ao validar a v0.17.0 no HML (Swarm + Traefik + Postgres compartilhado).
