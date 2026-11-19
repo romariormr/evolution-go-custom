@@ -17,13 +17,16 @@ import (
 // flow" (InteractiveMessage). Sem o <biz> o servidor responde erro 463.
 //
 // Formato completo (padrão, o mesmo que clientes oficiais de empresa e o
-// WA-AKG v1.7 mandam): o <biz> leva actual_actors/host_storage/privacy_mode_ts
-// e o filho <quality_control>; em conversa 1:1 vai junto <bot biz_bot="1">.
-// Isso melhora a exibição dos botões no iOS e no WhatsApp Web, que às vezes
-// mostravam "mensagem não suportada" com o formato mínimo.
+// WA-AKG mandam): o <biz> leva actual_actors/host_storage/privacy_mode_ts e o
+// filho <quality_control>.
 //
-// INTERACTIVE_NODES=legacy volta ao formato mínimo anterior (só <biz> com
-// <interactive><native_flow/>), caso algum cliente reaja mal ao completo.
+// <bot biz_bot="1"> NÃO vai mais em conversa 1:1: desde nov/2026 o WhatsApp
+// descarta em silêncio a mensagem interativa que leva esse nó (o envio volta
+// OK, mas botões/lista/carrossel nunca aparecem — visto no HML e no WA-AKG,
+// issue #112). INTERACTIVE_NODES=bot volta a incluir, se o WhatsApp mudar.
+//
+// INTERACTIVE_NODES=legacy volta ao formato mínimo (só <biz> com
+// <interactive><native_flow/>).
 func nativeFlowNodes(recipient types.JID, flowName string) []waBinary.Node {
 	if flowName == "" {
 		flowName = "mixed"
@@ -51,10 +54,21 @@ func nativeFlowNodes(recipient types.JID, flowName string) []waBinary.Node {
 			{Tag: "quality_control", Attrs: waBinary.Attrs{"source_type": "third_party"}},
 		},
 	}}
-	if recipient.Server == types.DefaultUserServer || recipient.Server == types.HiddenUserServer {
+	withBot := strings.EqualFold(strings.TrimSpace(os.Getenv("INTERACTIVE_NODES")), "bot")
+	if withBot && (recipient.Server == types.DefaultUserServer || recipient.Server == types.HiddenUserServer) {
 		nodes = append(nodes, waBinary.Node{Tag: "bot", Attrs: waBinary.Attrs{"biz_bot": "1"}})
 	}
 	return nodes
+}
+
+// flowNameOf: com um único botão o <native_flow> leva o nome dele (ex.:
+// "single_select" na lista); com vários, "mixed".
+func flowNameOf(msg *waE2E.Message) string {
+	btns := msg.GetInteractiveMessage().GetNativeFlowMessage().GetButtons()
+	if len(btns) == 1 && btns[0].GetName() != "" {
+		return btns[0].GetName()
+	}
+	return "mixed"
 }
 
 // nativeFlowList monta a lista como InteractiveMessage "single_select" (a

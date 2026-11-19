@@ -2406,6 +2406,20 @@ func (s *sendService) SendList(data *ListStruct, instance *instance_model.Instan
 		Delay:  data.Delay,
 	})
 
+	if err != nil && strings.Contains(err.Error(), "405") {
+		// O WhatsApp recusa o ListMessage antigo em várias contas ("server
+		// returned error 405"). Reenvia no formato atual (single_select).
+		s.loggerWrapper.GetLogger(instance.Id).LogWarn("[%s] ListMessage recusado (405), reenviando como nativeFlow", instance.Id)
+		nf, nfErr := nativeFlowList(data, buttonText)
+		if nfErr == nil {
+			message, err = s.SendMessage(instance, nf, "InteractiveMessage", &SendDataStruct{
+				Number:    data.Number,
+				Delay:     data.Delay,
+				FormatJid: data.FormatJid,
+				Quoted:    data.Quoted,
+			})
+		}
+	}
 	if err != nil {
 		s.loggerWrapper.GetLogger(instance.Id).LogError("[%s] Error sending list: %v", instance.Id, err)
 		return nil, err
@@ -2741,7 +2755,7 @@ func (s *sendService) SendMessage(instance *instance_model.Instance, msg *waE2E.
 
 	// InteractiveMessage (carousel, list com NativeFlow) requer biz node para WhatsApp não retornar erro 463
 	if messageType == "InteractiveMessage" {
-		bizNodes := nativeFlowNodes(recipient, "mixed")
+		bizNodes := nativeFlowNodes(recipient, flowNameOf(msg))
 		sendExtra.AdditionalNodes = &bizNodes
 	}
 
