@@ -1,5 +1,9 @@
 # Evolution GO - Changelog
 
+## v0.17.3
+
+- **Logo do Manager servida pelo próprio app** (`GET /access/branding/logo/:file`, pública). Antes a URL salva era a do MinIO (`http://minio:9000/...`), que o navegador não alcança quando o `MINIO_ENDPOINT` é interno — a logo aparecia quebrada. Só aceita nomes gerados pelo upload; SVG sai com CSP `sandbox` e `nosniff` (não executa script na origem do app). Logos já salvas com URL antiga continuam como estão; para trocar, suba de novo em Administração → Configurações.
+
 ## v0.17.2
 
 Mais vazamentos de dados no log do container (stdout), achados no HML:

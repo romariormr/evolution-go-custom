@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	access_model "github.com/EvolutionAPI/evolution-go/pkg/access/model"
 	access_repository "github.com/EvolutionAPI/evolution-go/pkg/access/repository"
@@ -25,7 +27,7 @@ type AccessHandler struct {
 	service         access_service.AccessService
 	instanceService instance_service.InstanceService
 	mediaStorage    storage_interfaces.MediaStorage // nil se MINIO_ENABLED=false
-	logoBaseURL     string                          // ex.: http://minio:9000/evo-go — vazio se MinIO desabilitado
+	logoBaseURL     string                          // legado (desde 0.17.3 a logo é servida em /access/branding/logo/:file)
 }
 
 func NewAccessHandler(service access_service.AccessService, instanceService instance_service.InstanceService, mediaStorage storage_interfaces.MediaStorage, logoBaseURL string) *AccessHandler {
@@ -40,6 +42,7 @@ func RegisterRoutes(eng *gin.Engine, h *AccessHandler) {
 		pub.POST("/login/2fa", h.LoginTwoFactor)
 		pub.POST("/logout", h.Logout)
 		pub.GET("/branding", h.Branding)
+		pub.GET("/branding/logo/:file", h.BrandingLogo)
 	}
 
 	auth := eng.Group("/access")
@@ -707,6 +710,45 @@ var allowedLogoTypes = map[string]bool{
 	"image/svg+xml": true,
 }
 
+var logoFileRe = regexp.MustCompile(`^branding-logo-[0-9a-f-]{36}\.(png|jpg|webp|svg)$`)
+
+var logoExtTypes = map[string]string{
+	"png": "image/png", "jpg": "image/jpeg", "webp": "image/webp", "svg": "image/svg+xml",
+}
+
+var logoHTTP = &http.Client{Timeout: 10 * time.Second}
+
+// BrandingLogo (público): entrega a logo guardada no MinIO pelo próprio app,
+// para funcionar mesmo com MINIO_ENDPOINT interno. Só aceita nomes gerados
+// pelo upload; SVG vai com CSP "sandbox" para não executar script na origem do app.
+func (h *AccessHandler) BrandingLogo(ctx *gin.Context) {
+	file := ctx.Param("file")
+	m := logoFileRe.FindStringSubmatch(file)
+	if h.mediaStorage == nil || m == nil {
+		ctx.Status(http.StatusNotFound)
+		return
+	}
+	src, err := h.mediaStorage.GetURL(ctx.Request.Context(), "evolution-go-medias/"+file)
+	if err != nil {
+		ctx.Status(http.StatusNotFound)
+		return
+	}
+	resp, err := logoHTTP.Get(src)
+	if err != nil {
+		ctx.Status(http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		ctx.Status(http.StatusNotFound)
+		return
+	}
+	ctx.Header("Cache-Control", "public, max-age=86400")
+	ctx.Header("X-Content-Type-Options", "nosniff")
+	ctx.Header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
+	ctx.DataFromReader(http.StatusOK, -1, logoExtTypes[m[1]], io.LimitReader(resp.Body, maxLogoSize), nil)
+}
+
 // AdminUploadLogo: sobe a logo pro MinIO (MEDIA_STORAGE já usado pra mídia do
 // WhatsApp) e salva a URL pública resultante em evogo_settings["branding.logo"].
 func (h *AccessHandler) AdminUploadLogo(ctx *gin.Context) {
@@ -753,15 +795,14 @@ func (h *AccessHandler) AdminUploadLogo(ctx *gin.Context) {
 	}
 	fileName := fmt.Sprintf("branding-logo-%s.%s", uuid.NewString(), ext)
 
-	// Store() devolve URL assinada (expira em 7 dias) — inadequado pra logo,
-	// que precisa ser permanente. O bucket já é configurado como público na
-	// construção do storage, então montamos a URL pública fixa nós mesmos,
-	// sem alterar o storage compartilhado (usado no pipeline de mídia do WhatsApp).
+	// Store() devolve URL assinada (expira em 7 dias) e com o endereço do
+	// MinIO (muitas vezes interno, ex.: http://minio:9000) — o navegador não
+	// alcança. A logo é servida pelo próprio app em /access/branding/logo/:file.
 	if _, err := h.mediaStorage.Store(ctx.Request.Context(), data, fileName, contentType); err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "falha ao enviar pro MinIO: " + err.Error()})
 		return
 	}
-	url := fmt.Sprintf("%s/evolution-go-medias/%s", h.logoBaseURL, fileName)
+	url := "/access/branding/logo/" + fileName
 
 	if err := h.service.SetSetting("branding.logo", url); err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
