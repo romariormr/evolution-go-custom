@@ -17,6 +17,8 @@
 //     separados por vírgula) liberadas mesmo com o bloqueio ligado.
 //   - O IP é conferido na hora de conectar (vale também para redirecionamentos
 //     e impede troca de DNS entre a checagem e a conexão).
+//   - Webhooks usam a mesma proteção com variáveis próprias
+//     (WEBHOOK_BLOCK_PRIVATE, WEBHOOK_ALLOWED_HOSTS) via NewClient("WEBHOOK", ...).
 //   - Limites: MEDIA_FETCH_TIMEOUT_SEC (padrão 120) e MEDIA_FETCH_MAX_MB
 //     (padrão 100) — corpo maior que isso dá erro em vez de lotar a memória.
 package safefetch
@@ -43,6 +45,7 @@ var (
 )
 
 type policy struct {
+	prefix       string
 	blockPrivate bool
 	allowHosts   map[string]bool
 	allowNets    []*net.IPNet
@@ -65,13 +68,19 @@ func envInt(name string, def int) int {
 }
 
 func loadPolicy() *policy {
+	return loadPolicyFor("MEDIA_FETCH", time.Duration(envInt("MEDIA_FETCH_TIMEOUT_SEC", 120))*time.Second)
+}
+
+// loadPolicyFor lê <prefix>_BLOCK_PRIVATE e <prefix>_ALLOWED_HOSTS.
+func loadPolicyFor(prefix string, timeout time.Duration) *policy {
 	p := &policy{
-		blockPrivate: strings.EqualFold(strings.TrimSpace(os.Getenv("MEDIA_FETCH_BLOCK_PRIVATE")), "true"),
+		prefix:       prefix,
+		blockPrivate: strings.EqualFold(strings.TrimSpace(os.Getenv(prefix+"_BLOCK_PRIVATE")), "true"),
 		allowHosts:   map[string]bool{},
 		maxBytes:     int64(envInt("MEDIA_FETCH_MAX_MB", 100)) << 20,
-		timeout:      time.Duration(envInt("MEDIA_FETCH_TIMEOUT_SEC", 120)) * time.Second,
+		timeout:      timeout,
 	}
-	for _, item := range strings.Split(os.Getenv("MEDIA_FETCH_ALLOWED_HOSTS"), ",") {
+	for _, item := range strings.Split(os.Getenv(prefix+"_ALLOWED_HOSTS"), ",") {
 		item = strings.ToLower(strings.TrimSpace(item))
 		if item == "" {
 			continue
@@ -130,7 +139,7 @@ func (p *policy) checkIP(host string, ip net.IP) error {
 		if p.blockPrivate {
 			return fmt.Errorf("%w: %s (%s)", ErrBlocked, host, ip)
 		}
-		logf("[SAFEFETCH] acesso a endereço interno liberado: %s (%s) — para bloquear, MEDIA_FETCH_BLOCK_PRIVATE=true e este host em MEDIA_FETCH_ALLOWED_HOSTS", host, ip)
+		logf("[SAFEFETCH] acesso a endereço interno liberado: %s (%s) — para bloquear, %s_BLOCK_PRIVATE=true e este host em %s_ALLOWED_HOSTS", host, ip, p.prefix, p.prefix)
 	}
 	return nil
 }
@@ -207,6 +216,13 @@ func (t uaTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		req.Header.Set("User-Agent", UserAgent)
 	}
 	return t.rt.RoundTrip(req)
+}
+
+// NewClient cria um cliente HTTP com a mesma proteção contra SSRF, lendo
+// <prefix>_BLOCK_PRIVATE e <prefix>_ALLOWED_HOSTS (ex.: prefix "WEBHOOK").
+// Loopback, link-local (metadados de nuvem) e multicast são sempre bloqueados.
+func NewClient(prefix string, timeout time.Duration) *http.Client {
+	return newClient(loadPolicyFor(prefix, timeout))
 }
 
 // Client devolve o cliente HTTP protegido (para quem precisa montar o request).

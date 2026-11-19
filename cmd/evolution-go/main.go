@@ -21,6 +21,7 @@ import (
 	"github.com/joho/godotenv"
 	"go.mau.fi/whatsmeow"
 	waStore "go.mau.fi/whatsmeow/store"
+	"go.mau.fi/whatsmeow/types"
 	"gorm.io/gorm"
 	_ "modernc.org/sqlite"
 
@@ -260,6 +261,17 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 	// consulta continua respondendo o que já foi gravado).
 	historyRetention, _ := strconv.Atoi(os.Getenv("MESSAGE_HISTORY_RETENTION_DAYS"))
 	historyService := history.NewService(db, loggerWrapper, historyRetention)
+	historyService.SetJIDResolver(func(instanceId string, lid types.JID) types.JID {
+		c := clientPointer[instanceId]
+		if c == nil || c.Store == nil || c.Store.LIDs == nil {
+			return types.EmptyJID
+		}
+		pn, err := c.Store.LIDs.GetPNForLID(context.Background(), lid)
+		if err != nil {
+			return types.EmptyJID
+		}
+		return pn
+	})
 	if strings.ToLower(strings.TrimSpace(os.Getenv("MESSAGE_HISTORY"))) != "off" {
 		whatsmeow_service.RegisterMessageHook(historyService.OnMessage)
 		whatsmeow_service.RegisterReceiptHook(historyService.OnReceipt)
