@@ -750,9 +750,8 @@ func (w whatsmeowService) StartClient(cd *ClientData) {
 						return
 					}
 
-					if w.config.LogType != "json" {
-						fmt.Println("QR code:\n", evt.Code)
-					}
+					// O código do QR não vai para o log (antes ia via fmt.Println):
+					// a contagem já é logada acima.
 
 					image, _ := qrcode.Encode(evt.Code, qrcode.Medium, 256)
 					base64qrcode := "data:image/png;base64," + base64.StdEncoding.EncodeToString(image)
@@ -1437,14 +1436,6 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		}
 
 		if evt.Message.GetPollUpdateMessage() != nil {
-			fmt.Printf("[POLL DEBUG] 🎯 PollUpdateMessage detected!\n")
-			fmt.Printf("[POLL DEBUG] � BEFORE accessing evt.Info - Sender: %s, Server: %s\n", evt.Info.Sender.String(), evt.Info.Sender.Server)
-			fmt.Printf("[POLL DEBUG] 📍 BEFORE accessing evt.Info - SenderAlt: %s\n", evt.Info.SenderAlt.String())
-			fmt.Printf("[POLL DEBUG] �� mycli.WAClient is nil: %v\n", mycli.WAClient == nil)
-			if mycli.WAClient != nil {
-				fmt.Printf("[POLL DEBUG] ✅ mycli.WAClient is initialized: %s\n", mycli.WAClient.Store.ID)
-			}
-
 			decrypted, err := mycli.clientPointer[mycli.userID].DecryptPollVote(context.Background(), evt)
 			if err != nil {
 				mycli.loggerWrapper.GetLogger(mycli.userID).LogError("[%s] Failed to decrypt vote: %v", mycli.userID, err)
