@@ -1,5 +1,14 @@
 # Evolution GO - Changelog
 
+## v0.17.9
+
+Projeto aberto: nada específico de uma instalação fica fixo no código ou no yaml.
+
+- **`deploy/portainer-stack.yml`: todo ajuste vira variável** com padrão (`${VAR:-padrão}`): fuso (`TZ`, padrão `America/Sao_Paulo`), retenções, histórico, limites de conexão, eventos, proteção SSRF de downloads e webhooks (`MEDIA_FETCH_*`, `WEBHOOK_*`), `WEBHOOK_URL`, `WEBHOOK_DELIVERY_LOG`, `INTERACTIVE_NODES`, entrypoint do Traefik (`TRAEFIK_ENTRYPOINT`) e limites do container (`EVOGO_MEMORY_LIMIT`, `EVOGO_CPU_LIMIT`). Quem já usa a stack não precisa mudar nada.
+- **User-Agent dos downloads/webhooks configurável** (`MEDIA_FETCH_USER_AGENT`); o padrão não aponta mais para um repositório.
+- Exemplos no código e no Manager sem nomes de empresa nem números reais.
+- `.env.example` documenta as variáveis novas.
+
 ## v0.17.8
 
 ### Segurança

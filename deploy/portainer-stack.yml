@@ -23,8 +23,16 @@
 #   MINIO_*          opcional — MINIO_ENABLED=true + ENDPOINT/ACCESS_KEY/SECRET_KEY/BUCKET
 #                    (o bucket precisa existir; o app não cria)
 #   WADEBUG          opcional — nível de log (padrão WARN)
-#   EVOGO_IMAGE      opcional — fixe uma versão (ex: ...:0.16.41) para não
+#   EVOGO_IMAGE      opcional — fixe uma versão (ex: ...:0.17.8) para não
 #                    pegar a :latest sem querer num restart
+#   TZ               opcional — fuso (padrão America/Sao_Paulo)
+#   TRAEFIK_ENTRYPOINT opcional — entrypoint HTTPS do Traefik (padrão websecure)
+#   WEBHOOK_URL      opcional — webhook global (todas as instâncias)
+#   WEBHOOK_BLOCK_PRIVATE / WEBHOOK_ALLOWED_HOSTS — proteção SSRF dos webhooks
+#   MEDIA_FETCH_BLOCK_PRIVATE / MEDIA_FETCH_ALLOWED_HOSTS — idem, downloads por URL
+#   EVOGO_MEMORY_LIMIT / EVOGO_CPU_LIMIT — limites do container (padrão 2G / 2)
+#   Demais ajustes (retenção, histórico, eventos...) também aceitam variável
+#   com o mesmo nome; o valor no yaml é só o padrão.
 #
 # ⚠️ Sempre 1 réplica. Duas cópias com o mesmo banco usam as mesmas sessões do
 #    WhatsApp e se derrubam ("stream replaced"). Por isso o update é stop-first.
@@ -39,41 +47,53 @@ services:
     environment:
       SERVER_PORT: "4000"
       SERVER_URL: "https://${EVOGO_DOMAIN}"
-      CLIENT_NAME: "evolution-go"
+      CLIENT_NAME: "${CLIENT_NAME:-evolution-go}"
       GLOBAL_API_KEY: "${GLOBAL_API_KEY}"
       # Chave que cifra segredos no banco (senha do LDAP, 2FA). Defina uma vez
       # e não troque. Vazia = usa a GLOBAL_API_KEY.
       EVOGO_SECRET_KEY: "${EVOGO_SECRET_KEY:-}"
-      AUDIT_RETENTION_DAYS: "180"
-      TZ: "America/Fortaleza"
+      AUDIT_RETENTION_DAYS: "${AUDIT_RETENTION_DAYS:-180}"
+      TZ: "${TZ:-America/Sao_Paulo}"
 
       # Banco: um só banco para sessões e dados.
       POSTGRES_AUTH_DB: *db
       POSTGRES_USERS_DB: *db
       # Limite de conexões (total máximo = AUTH + USERS). Combine com o DBA.
-      POSTGRES_AUTH_MAX_OPEN: "15"
-      POSTGRES_AUTH_MAX_IDLE: "3"
-      POSTGRES_USERS_MAX_OPEN: "15"
-      POSTGRES_USERS_MAX_IDLE: "3"
+      POSTGRES_AUTH_MAX_OPEN: "${POSTGRES_AUTH_MAX_OPEN:-15}"
+      POSTGRES_AUTH_MAX_IDLE: "${POSTGRES_AUTH_MAX_IDLE:-3}"
+      POSTGRES_USERS_MAX_OPEN: "${POSTGRES_USERS_MAX_OPEN:-15}"
+      POSTGRES_USERS_MAX_IDLE: "${POSTGRES_USERS_MAX_IDLE:-3}"
 
       # Histórico e retenção
-      DATABASE_SAVE_MESSAGES: "true"           # tabela antiga de mensagens (usada pelos endpoints /message)
-      MESSAGE_HISTORY: "on"
-      MESSAGE_HISTORY_RETENTION_DAYS: "90"
-      MESSAGE_SECRETS_RETENTION_DAYS: "30"
+      DATABASE_SAVE_MESSAGES: "${DATABASE_SAVE_MESSAGES:-true}"           # tabela antiga de mensagens (usada pelos endpoints /message)
+      MESSAGE_HISTORY: "${MESSAGE_HISTORY:-on}"
+      MESSAGE_HISTORY_RETENTION_DAYS: "${MESSAGE_HISTORY_RETENTION_DAYS:-90}"
+      MESSAGE_SECRETS_RETENTION_DAYS: "${MESSAGE_SECRETS_RETENTION_DAYS:-30}"
 
       # Downloads por URL (proteção SSRF). Rede interna liberada por padrão.
-      MEDIA_FETCH_BLOCK_PRIVATE: "false"
-      MEDIA_FETCH_MAX_MB: "100"
+      MEDIA_FETCH_BLOCK_PRIVATE: "${MEDIA_FETCH_BLOCK_PRIVATE:-false}"
+      MEDIA_FETCH_MAX_MB: "${MEDIA_FETCH_MAX_MB:-100}"
+      MEDIA_FETCH_ALLOWED_HOSTS: "${MEDIA_FETCH_ALLOWED_HOSTS:-}"
+      MEDIA_FETCH_USER_AGENT: "${MEDIA_FETCH_USER_AGENT:-}"
+
+      # Webhooks: loopback e metadados de nuvem sempre bloqueados; rede interna
+      # liberada, a não ser com WEBHOOK_BLOCK_PRIVATE=true (+ exceções).
+      WEBHOOK_URL: "${WEBHOOK_URL:-}"
+      WEBHOOK_BLOCK_PRIVATE: "${WEBHOOK_BLOCK_PRIVATE:-false}"
+      WEBHOOK_ALLOWED_HOSTS: "${WEBHOOK_ALLOWED_HOSTS:-}"
+      WEBHOOK_DELIVERY_LOG: "${WEBHOOK_DELIVERY_LOG:-failures}"   # failures | all | off
+
+      # Botões/listas: vazio = padrão; "bot" ou "legacy" só se o WhatsApp mudar
+      INTERACTIVE_NODES: "${INTERACTIVE_NODES:-}"
 
       # Comportamento
-      CONNECT_ON_STARTUP: "true"
-      QRCODE_MAX_COUNT: "5"
-      CHECK_USER_EXISTS: "true"
-      EVENT_IGNORE_GROUP: "false"
-      EVENT_IGNORE_STATUS: "true"
-      WEBHOOK_FILES: "true"
-      OS_NAME: "Linux"
+      CONNECT_ON_STARTUP: "${CONNECT_ON_STARTUP:-true}"
+      QRCODE_MAX_COUNT: "${QRCODE_MAX_COUNT:-5}"
+      CHECK_USER_EXISTS: "${CHECK_USER_EXISTS:-true}"
+      EVENT_IGNORE_GROUP: "${EVENT_IGNORE_GROUP:-false}"
+      EVENT_IGNORE_STATUS: "${EVENT_IGNORE_STATUS:-true}"
+      WEBHOOK_FILES: "${WEBHOOK_FILES:-true}"
+      OS_NAME: "${OS_NAME:-Linux}"
       # Versão do cliente WhatsApp. Se o WhatsApp recusar a conexão com
       # "Client outdated (405)", suba o PATCH (ver "proto: update to vNNN" nos
       # commits do whatsmeow) — não precisa nova imagem.
@@ -83,8 +103,8 @@ services:
       WHATSAPP_VERSION_PATCH: "${WHATSAPP_VERSION_PATCH:-1048844063}"
 
       # Integrações desligadas (ligue só se usar; NATS sem servidor gera erro no log)
-      AMQP_GLOBAL_ENABLED: "false"
-      NATS_GLOBAL_ENABLED: "false"
+      AMQP_GLOBAL_ENABLED: "${AMQP_GLOBAL_ENABLED:-false}"
+      NATS_GLOBAL_ENABLED: "${NATS_GLOBAL_ENABLED:-false}"
 
       # MinIO (mídias recebidas viram URL no webhook/histórico)
       MINIO_ENABLED: "${MINIO_ENABLED:-false}"
@@ -132,20 +152,20 @@ services:
         window: 120s
       resources:
         limits:
-          memory: 2G
-          cpus: "2"
+          memory: "${EVOGO_MEMORY_LIMIT:-2G}"
+          cpus: "${EVOGO_CPU_LIMIT:-2}"
         reservations:
           memory: 256M
       labels:
         traefik.enable: "true"
         traefik.docker.network: "${TRAEFIK_NETWORK:-minha_rede}"
         traefik.http.routers.evolutiongo.rule: "Host(`${EVOGO_DOMAIN}`)"
-        traefik.http.routers.evolutiongo.entrypoints: "websecure"
+        traefik.http.routers.evolutiongo.entrypoints: "${TRAEFIK_ENTRYPOINT:-websecure}"
         traefik.http.routers.evolutiongo.tls: "true"
         traefik.http.services.evolutiongo.loadbalancer.server.port: "4000"
         # Abrir só o domínio (/) leva direto ao Manager
         traefik.http.routers.evolutiongo-root.rule: "Host(`${EVOGO_DOMAIN}`) && Path(`/`)"
-        traefik.http.routers.evolutiongo-root.entrypoints: "websecure"
+        traefik.http.routers.evolutiongo-root.entrypoints: "${TRAEFIK_ENTRYPOINT:-websecure}"
         traefik.http.routers.evolutiongo-root.tls: "true"
         traefik.http.routers.evolutiongo-root.priority: "100"
         traefik.http.routers.evolutiongo-root.service: "evolutiongo"
