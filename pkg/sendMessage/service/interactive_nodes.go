@@ -61,16 +61,6 @@ func nativeFlowNodes(recipient types.JID, flowName string) []waBinary.Node {
 	return nodes
 }
 
-// flowNameOf: com um único botão o <native_flow> leva o nome dele (ex.:
-// "single_select" na lista); com vários, "mixed".
-func flowNameOf(msg *waE2E.Message) string {
-	btns := msg.GetInteractiveMessage().GetNativeFlowMessage().GetButtons()
-	if len(btns) == 1 && btns[0].GetName() != "" {
-		return btns[0].GetName()
-	}
-	return "mixed"
-}
-
 // nativeFlowList monta a lista como InteractiveMessage "single_select" (a
 // gaveta de opções dos clientes atuais), alternativa ao ListMessage antigo.
 func nativeFlowList(data *ListStruct, buttonText string) (*waE2E.Message, error) {
