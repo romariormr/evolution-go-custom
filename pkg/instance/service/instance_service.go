@@ -948,6 +948,7 @@ func (i instances) AddWebhook(instanceId string, url string) (*instance_model.In
 	if err := i.instanceRepository.Update(instance); err != nil {
 		return nil, err
 	}
+	i.syncRuntimeWebhooks(instanceId)
 	return instance, nil
 }
 
@@ -966,7 +967,16 @@ func (i instances) RemoveWebhook(instanceId string, url string) (*instance_model
 	if err := i.instanceRepository.Update(instance); err != nil {
 		return nil, err
 	}
+	i.syncRuntimeWebhooks(instanceId)
 	return instance, nil
+}
+
+// syncRuntimeWebhooks: o cliente conectado guarda uma cópia da instância; sem
+// isso, webhook adicionado/removido só valia depois de reconectar.
+func (i instances) syncRuntimeWebhooks(instanceId string) {
+	if err := i.whatsmeowService.UpdateInstanceSettings(instanceId); err != nil {
+		i.loggerWrapper.GetLogger(instanceId).LogInfo("[%s] Instance not in runtime, webhooks apply on next connect", instanceId)
+	}
 }
 
 func (i instances) ListWebhooks(instanceId string) ([]string, error) {

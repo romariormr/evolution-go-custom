@@ -157,8 +157,14 @@ type PollStruct struct {
 }
 
 type StickerStruct struct {
-	Number       string       `json:"number"`
-	Sticker      string       `json:"sticker"`
+	Number string `json:"number"`
+	// Sticker: URL http(s), data URI (data:image/png;base64,...) ou base64 puro.
+	// PNG/JPG/WebP/GIF (GIF usa o 1º quadro); vira WebP 512x512 com fundo transparente.
+	Sticker string `json:"sticker"`
+	// Metadados opcionais, mostrados pelo WhatsApp ao tocar na figurinha.
+	PackName      string       `json:"packName,omitempty" example:"Minha Empresa"`
+	PackPublisher string       `json:"packPublisher,omitempty" example:"Atendimento"`
+	Emojis        []string     `json:"emojis,omitempty" example:"😀"`
 	Id           string       `json:"id"`
 	Delay        int32        `json:"delay"`
 	MentionedJID []string     `json:"mentionedJid"`
@@ -1730,63 +1736,37 @@ func (s *sendService) sendPollWithRetry(data *PollStruct, instance *instance_mod
 	return nil, fmt.Errorf("failed to send poll after %d attempts", maxRetries)
 }
 
-func convertToWebP(imageData string) ([]byte, error) {
-	var img image.Image
-	var err error
-
-	resp, err := safefetch.Get(imageData)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch image from URL: %v", err)
-	}
-	defer resp.Body.Close()
-
-	img, _, err = image.Decode(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode image: %v", err)
-	}
-
-	var webpBuffer bytes.Buffer
-	err = webp.Encode(&webpBuffer, img, &webp.Options{Lossless: false, Quality: 80})
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode image to WebP: %v", err)
-	}
-
-	return webpBuffer.Bytes(), nil
-}
-
 func (s *sendService) SendSticker(data *StickerStruct, instance *instance_model.Instance) (*MessageSendStruct, error) {
 	client, err := s.ensureClientConnected(instance.Id)
 	if err != nil {
 		return nil, err
 	}
 
-	var uploaded whatsmeow.UploadResponse
-	var filedata []byte
+	raw, err := loadStickerSource(data.Sticker)
+	if err != nil {
+		return nil, err
+	}
+	filedata, err := buildSticker(raw, stickerMeta{PackName: data.PackName, PackPublisher: data.PackPublisher, Emojis: data.Emojis})
+	if err != nil {
+		return nil, err
+	}
 
-	if strings.HasPrefix(data.Sticker, "http") {
-		webpData, err := convertToWebP(data.Sticker)
-		if err != nil {
-			return nil, fmt.Errorf("failed to convert image to WebP: %v", err)
-		}
-
-		filedata = webpData
-
-		uploaded, err = client.Upload(context.Background(), filedata, whatsmeow.MediaImage)
-		if err != nil {
-			return nil, fmt.Errorf("failed to upload sticker: %v", err)
-		}
-	} else {
-		return nil, fmt.Errorf("invalid sticker URL")
+	uploaded, err := client.Upload(context.Background(), filedata, whatsmeow.MediaImage)
+	if err != nil {
+		return nil, fmt.Errorf("failed to upload sticker: %v", err)
 	}
 
 	msg := &waE2E.Message{StickerMessage: &waE2E.StickerMessage{
 		URL:           proto.String(uploaded.URL),
 		DirectPath:    proto.String(uploaded.DirectPath),
 		MediaKey:      uploaded.MediaKey,
-		Mimetype:      proto.String(http.DetectContentType(filedata)),
+		Mimetype:      proto.String("image/webp"),
 		FileEncSHA256: uploaded.FileEncSHA256,
 		FileSHA256:    uploaded.FileSHA256,
 		FileLength:    proto.Uint64(uint64(len(filedata))),
+		Width:         proto.Uint32(stickerSize),
+		Height:        proto.Uint32(stickerSize),
+		IsAnimated:    proto.Bool(false),
 	}}
 
 	message, err := s.SendMessage(instance, msg, "StickerMessage", &SendDataStruct{
@@ -2566,6 +2546,12 @@ func (s *sendService) SendMessage(instance *instance_model.Instance, msg *waE2E.
 					QuotedMessage: &waE2E.Message{Conversation: proto.String("")},
 				}
 			}
+		case "AlbumMessage":
+			msg.AlbumMessage.ContextInfo = &waE2E.ContextInfo{
+				StanzaID:      proto.String(data.Quoted.MessageID),
+				Participant:   proto.String(data.Quoted.Participant),
+				QuotedMessage: &waE2E.Message{Conversation: proto.String("")},
+			}
 		default:
 			return nil, fmt.Errorf("invalid messageType: %s", messageType)
 		}
@@ -2604,6 +2590,8 @@ func (s *sendService) SendMessage(instance *instance_model.Instance, msg *waE2E.
 			// ContextInfo already set in SendCarousel/SendButton/SendList
 		case "ListMessage":
 			// ContextInfo already set in SendList
+		case "AlbumMessage":
+			// âncora do álbum (SendAlbum): sem ContextInfo
 		default:
 			return nil, fmt.Errorf("invalid messageType: %s", messageType)
 		}

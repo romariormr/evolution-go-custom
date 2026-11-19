@@ -1,5 +1,15 @@
 # Evolution GO - Changelog
 
+## v0.17.5
+
+Achados do teste ponta a ponta no HML (celular real):
+
+- **Figurinhas de verdade** (`POST /send/sticker`): a imagem agora é centralizada num quadrado **512x512 com fundo transparente**, sem distorcer (antes saía no tamanho original, esticada). Aceita **URL, data URI ou base64 puro**; PNG, JPG, WebP e GIF (1º quadro). Novos campos opcionais `packName`, `packPublisher` e `emojis` (até 3), gravados no EXIF que o WhatsApp mostra. Qualidade reduzida automaticamente para ficar perto de 100 KB.
+- **Álbum** (`POST /send/album`) falhava sempre com `invalid messageType: AlbumMessage`. Corrigido.
+- **Webhooks extras** adicionados/removidos em `/instance/webhooks/:id` só passavam a valer depois de reconectar a instância (o cliente em execução guardava a lista antiga). Agora valem na hora.
+- **Votos de enquete** em conversas com LID davam `failed to decrypt poll vote: message authentication failed`. Agora tenta também com o identificador alternativo (LID ↔ telefone).
+- **Download de mídia por URL** manda um User-Agent identificado. Sites como a Wikimedia recusavam (HTTP 403) o padrão do Go.
+
 ## v0.17.4
 
 - **Primeiro acesso explicado na tela de login.** Em instalação nova (único usuário é o `admin` ainda com a senha inicial), o login mostra um aviso: usuário `admin` (já preenchido) e senha = valor da `GLOBAL_API_KEY` do deploy (Portainer → Stacks → Environment variables, ou `.env`). `GET /access/branding` passa a devolver `firstAccess` (só um booleano; some depois da troca de senha).
