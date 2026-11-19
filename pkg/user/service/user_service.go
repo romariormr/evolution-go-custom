@@ -153,6 +153,43 @@ func (u *userService) ensureClientConnected(instanceId string) (*whatsmeow.Clien
 	return client, nil
 }
 
+// toLID troca um JID de telefone (@s.whatsapp.net) pelo LID do contato.
+// Desde a migração para LID o WhatsApp não responde mais às consultas usync
+// (GetUserInfo) e de foto de perfil feitas pelo telefone: a requisição só
+// expira depois de 75s ("info query timed out"). Pelo LID a resposta é
+// imediata. Usa o mapeamento local e, se não houver, pergunta ao WhatsApp
+// (IsOnWhatsApp devolve o LID). Sem LID conhecido, devolve o JID original.
+func toLID(client *whatsmeow.Client, jid types.JID) types.JID {
+	if jid.Server != types.DefaultUserServer {
+		return jid
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if client.Store.LIDs != nil {
+		if lid, err := client.Store.LIDs.GetLIDForPN(ctx, jid); err == nil && !lid.IsEmpty() {
+			return lid
+		}
+	}
+	resp, err := client.IsOnWhatsApp(ctx, []string{"+" + jid.User})
+	if err != nil {
+		return jid
+	}
+	for _, it := range resp {
+		if !it.IsIn {
+			continue
+		}
+		if it.JID.Server == types.HiddenUserServer {
+			return it.JID
+		}
+		if client.Store.LIDs != nil {
+			if lid, err := client.Store.LIDs.GetLIDForPN(ctx, it.JID); err == nil && !lid.IsEmpty() {
+				return lid
+			}
+		}
+	}
+	return jid
+}
+
 func (u *userService) GetUser(data *CheckUserStruct, instance *instance_model.Instance) (*UserCollection, error) {
 	client, err := u.ensureClientConnected(instance.Id)
 	if err != nil {
@@ -160,12 +197,15 @@ func (u *userService) GetUser(data *CheckUserStruct, instance *instance_model.In
 	}
 
 	var jids []types.JID
+	requested := make(map[types.JID]types.JID) // JID consultado (LID) -> JID pedido
 	for _, arg := range data.Number {
 		jid, ok := utils.ParseJID(arg)
 		if !ok {
 			return nil, errors.New("invalid phone number")
 		}
-		jids = append(jids, jid)
+		q := toLID(client, jid)
+		requested[q] = jid
+		jids = append(jids, q)
 	}
 	resp, err := client.GetUserInfo(context.Background(), jids)
 	if err != nil {
@@ -175,10 +215,17 @@ func (u *userService) GetUser(data *CheckUserStruct, instance *instance_model.In
 	uc := new(UserCollection)
 	uc.Users = make(map[types.JID]UserInfo)
 
-	for jid, whatsmeowInfo := range resp {
-		// Consultar LID Store para obter LID associado ao JID
+	for queried, whatsmeowInfo := range resp {
+		// Resposta indexada pelo JID que o cliente pediu (compatível com antes).
+		jid := queried
+		if orig, ok := requested[queried]; ok {
+			jid = orig
+		}
 		var lidStr *string
-		if client.Store.LIDs != nil {
+		if queried.Server == types.HiddenUserServer {
+			lidString := queried.String()
+			lidStr = &lidString
+		} else if client.Store.LIDs != nil {
 			if lid, err := client.Store.LIDs.GetLIDForPN(context.TODO(), jid); err == nil && !lid.IsEmpty() {
 				lidString := fmt.Sprintf("%v", lid)
 				lidStr = &lidString
@@ -341,6 +388,7 @@ func (u *userService) GetAvatar(data *GetAvatarStruct, instance *instance_model.
 	if !ok {
 		return nil, errors.New("invalid phone number")
 	}
+	jid = toLID(client, jid)
 
 	u.loggerWrapper.GetLogger(instance.Id).LogInfo("[%s] Requesting avatar for JID: %s, Preview: %v", instance.Id, jid, data.Preview)
 

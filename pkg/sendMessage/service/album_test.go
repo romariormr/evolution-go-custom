@@ -35,14 +35,18 @@ func TestNativeFlowNodes(t *testing.T) {
 	group := types.NewJID("123", types.GroupServer)
 
 	nodes := nativeFlowNodes(dm, "")
-	if len(nodes) != 2 || nodes[0].Tag != "biz" || nodes[1].Tag != "bot" || nodes[1].Attrs["biz_bot"] != "1" {
-		t.Fatalf("1:1 deve ter <biz> e <bot biz_bot=1>: %+v", nodes)
+	if len(nodes) != 1 || nodes[0].Tag != "biz" {
+		t.Fatalf("1:1 deve ter só o <biz> (sem <bot>, o WhatsApp descarta): %+v", nodes)
 	}
 	if nodes[0].Attrs["actual_actors"] != "2" {
 		t.Fatalf("<biz> sem atributos completos: %+v", nodes[0].Attrs)
 	}
 	if len(nativeFlowNodes(group, "mixed")) != 1 {
 		t.Fatal("grupo não leva <bot>")
+	}
+	t.Setenv("INTERACTIVE_NODES", "bot")
+	if n := nativeFlowNodes(dm, "mixed"); len(n) != 2 || n[1].Attrs["biz_bot"] != "1" {
+		t.Fatalf("INTERACTIVE_NODES=bot deve incluir <bot>: %+v", n)
 	}
 	t.Setenv("INTERACTIVE_NODES", "legacy")
 	legacy := nativeFlowNodes(dm, "mixed")
