@@ -172,7 +172,8 @@ const defaultAppName = "Evolution GO"
 
 func (h *AccessHandler) Branding(ctx *gin.Context) {
 	all, err := h.service.ListSettings()
-	out := gin.H{"appName": defaultAppName, "logo": ""}
+	// firstAccess: só um booleano (instalação nova, admin com senha inicial).
+	out := gin.H{"appName": defaultAppName, "logo": "", "firstAccess": h.service.FirstAccess()}
 	if err == nil {
 		for settingKey, outKey := range brandingKeys {
 			if v, ok := all[settingKey]; ok && v != "" {

@@ -3,9 +3,11 @@ import axios from 'axios';
 export interface Branding {
   appName: string;
   logo: string;
+  // Instalação nova: único usuário é o 'admin' com a senha inicial (GLOBAL_API_KEY).
+  firstAccess?: boolean;
 }
 
-const DEFAULT_BRANDING: Branding = { appName: 'Evolution GO', logo: '' };
+const DEFAULT_BRANDING: Branding = { appName: 'Evolution GO', logo: '', firstAccess: false };
 
 // Endpoint público — sem apikey/Authorization. Usa axios puro (não o apiClient
 // autenticado) para funcionar também na tela de login, antes de qualquer sessão.

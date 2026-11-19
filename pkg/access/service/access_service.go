@@ -70,6 +70,7 @@ type UpdateUserInput struct {
 type AccessService interface {
 	Bootstrap() error
 	Maintenance()
+	FirstAccess() bool
 
 	// login / sessão
 	Login(identifier, password string, ci ClientInfo) (*LoginResult, error)
@@ -167,6 +168,18 @@ func (s *accessService) Bootstrap() error {
 	}
 	fmt.Println("[ACCESS] usuário 'admin' criado (senha inicial = GLOBAL_API_KEY, troca obrigatória)")
 	return nil
+}
+
+// FirstAccess: true enquanto o único usuário é o 'admin' criado no Bootstrap e
+// ele ainda não trocou a senha inicial (= GLOBAL_API_KEY). A tela de login usa
+// isso para explicar o primeiro acesso. Não expõe nenhum segredo.
+func (s *accessService) FirstAccess() bool {
+	if n, err := s.repo.CountUsers(); err != nil || n != 1 {
+		return false
+	}
+	u, err := s.repo.GetUserByUsername("admin")
+	return err == nil && u != nil && u.Active && u.MustChangePassword &&
+		u.AuthSource == access_model.AuthSourceLocal
 }
 
 // Maintenance: apaga sessões vencidas (>7 dias) e auditoria antiga (AUDIT_RETENTION_DAYS, padrão 180).

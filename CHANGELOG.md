@@ -1,5 +1,11 @@
 # Evolution GO - Changelog
 
+## v0.17.4
+
+- **Primeiro acesso explicado na tela de login.** Em instalação nova (único usuário é o `admin` ainda com a senha inicial), o login mostra um aviso: usuário `admin` (já preenchido) e senha = valor da `GLOBAL_API_KEY` do deploy (Portainer → Stacks → Environment variables, ou `.env`). `GET /access/branding` passa a devolver `firstAccess` (só um booleano; some depois da troca de senha).
+- **URL da API não fica mais exposta ao autopreenchimento.** No modo usuário e senha ela vem preenchida com o endereço da página e aparece só como "Servidor: … alterar". O gerenciador de senhas do navegador preenchia `admin` nesse campo e o login falhava com "Erro desconhecido". Agora a URL é validada antes de enviar, com mensagem clara se estiver errada.
+- Texto do modo legado deixa claro que é acesso de emergência com a chave mestra e não identifica quem entrou.
+
 ## v0.17.3
 
 - **Logo do Manager servida pelo próprio app** (`GET /access/branding/logo/:file`, pública). Antes a URL salva era a do MinIO (`http://minio:9000/...`), que o navegador não alcança quando o `MINIO_ENDPOINT` é interno — a logo aparecia quebrada. Só aceita nomes gerados pelo upload; SVG sai com CSP `sandbox` e `nosniff` (não executa script na origem do app). Logos já salvas com URL antiga continuam como estão; para trocar, suba de novo em Administração → Configurações.
