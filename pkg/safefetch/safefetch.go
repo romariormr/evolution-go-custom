@@ -182,7 +182,7 @@ func newClient(p *policy) *http.Client {
 	}
 	return &http.Client{
 		Timeout:   p.timeout,
-		Transport: transport,
+		Transport: uaTransport{transport},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 5 {
 				return errors.New("redirecionamentos demais")
@@ -193,6 +193,20 @@ func newClient(p *policy) *http.Client {
 			return nil
 		},
 	}
+}
+
+// UserAgent padrão dos downloads. Sites como a Wikimedia recusam (403) o
+// "Go-http-client/1.1"; um UA identificado com contato é aceito.
+const UserAgent = "Mozilla/5.0 (compatible; Evolution-GO; +https://github.com/romariormr/evolution-go-custom)"
+
+type uaTransport struct{ rt http.RoundTripper }
+
+func (t uaTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Header.Get("User-Agent") == "" {
+		req = req.Clone(req.Context())
+		req.Header.Set("User-Agent", UserAgent)
+	}
+	return t.rt.RoundTrip(req)
 }
 
 // Client devolve o cliente HTTP protegido (para quem precisa montar o request).

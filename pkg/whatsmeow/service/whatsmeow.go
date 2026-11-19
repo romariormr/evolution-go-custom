@@ -1436,7 +1436,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		}
 
 		if evt.Message.GetPollUpdateMessage() != nil {
-			decrypted, err := mycli.clientPointer[mycli.userID].DecryptPollVote(context.Background(), evt)
+			decrypted, err := decryptPollVoteLIDAware(mycli.clientPointer[mycli.userID], evt)
 			if err != nil {
 				mycli.loggerWrapper.GetLogger(mycli.userID).LogError("[%s] Failed to decrypt vote: %v", mycli.userID, err)
 			} else {
@@ -2503,6 +2503,23 @@ func (w *whatsmeowService) CallWebhook(instance *instance_model.Instance, queueN
 	default:
 		return
 	}
+}
+
+// decryptPollVoteLIDAware: na migração para LID, o voto pode chegar com o
+// remetente no formato telefone (@s.whatsapp.net) enquanto a chave foi
+// derivada com o LID (ou o contrário) — dá "message authentication failed".
+// Tenta de novo trocando Sender pelo SenderAlt.
+func decryptPollVoteLIDAware(cli *whatsmeow.Client, evt *events.Message) (*waE2E.PollVoteMessage, error) {
+	decrypted, err := cli.DecryptPollVote(context.Background(), evt)
+	if err == nil || evt.Info.SenderAlt.IsEmpty() {
+		return decrypted, err
+	}
+	alt := *evt
+	alt.Info.Sender, alt.Info.SenderAlt = evt.Info.SenderAlt, evt.Info.Sender
+	if d, err2 := cli.DecryptPollVote(context.Background(), &alt); err2 == nil {
+		return d, nil
+	}
+	return nil, err
 }
 
 func contains(subscriptions []string, event string) bool {
