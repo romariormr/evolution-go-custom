@@ -21,6 +21,8 @@
 #   DB_SSLMODE       opcional — disable | require | verify-full (padrão disable)
 #   TRAEFIK_NETWORK  opcional — rede externa do Traefik (padrão minha_rede)
 #   MINIO_*          opcional — MINIO_ENABLED=true + ENDPOINT/ACCESS_KEY/SECRET_KEY/BUCKET
+#                    (o bucket precisa existir; o app não cria)
+#   WADEBUG          opcional — nível de log (padrão WARN)
 #   EVOGO_IMAGE      opcional — fixe uma versão (ex: ...:0.16.41) para não
 #                    pegar a :latest sem querer num restart
 #
@@ -93,8 +95,9 @@ services:
       MINIO_REGION: "${MINIO_REGION:-us-east-1}"
       MINIO_USE_SSL: "${MINIO_USE_SSL:-false}"
 
-      # Logs
-      WADEBUG: "WARN"
+      # Logs (DEBUG | INFO | WARN | ERROR)
+      WADEBUG: "${WADEBUG:-WARN}"
+      GIN_MODE: "release"                      # sem a lista de rotas [GIN-debug] a cada boot
       LOGTYPE: "console"
       LOG_DIRECTORY: "/app/logs"
     volumes:
@@ -140,6 +143,16 @@ services:
         traefik.http.routers.evolutiongo.entrypoints: "websecure"
         traefik.http.routers.evolutiongo.tls: "true"
         traefik.http.services.evolutiongo.loadbalancer.server.port: "4000"
+        # Abrir só o domínio (/) leva direto ao Manager
+        traefik.http.routers.evolutiongo-root.rule: "Host(`${EVOGO_DOMAIN}`) && Path(`/`)"
+        traefik.http.routers.evolutiongo-root.entrypoints: "websecure"
+        traefik.http.routers.evolutiongo-root.tls: "true"
+        traefik.http.routers.evolutiongo-root.priority: "100"
+        traefik.http.routers.evolutiongo-root.service: "evolutiongo"
+        traefik.http.routers.evolutiongo-root.middlewares: "evolutiongo-root-redirect"
+        traefik.http.middlewares.evolutiongo-root-redirect.redirectregex.regex: "^https://([^/]+)/$$"
+        traefik.http.middlewares.evolutiongo-root-redirect.redirectregex.replacement: "https://$${1}/manager"
+        traefik.http.middlewares.evolutiongo-root-redirect.redirectregex.permanent: "true"
 
 # Sem "ports:" de propósito: só acessível via Traefik (TLS).
 

@@ -20,6 +20,11 @@ func NewNatsProducer(
 	natsGlobalEvents []string,
 	loggerWrapper *logger_wrapper.LoggerManager,
 ) producer_interfaces.Producer {
+	// Sem NATS_URL: NATS desligado, sem tentar conectar em 127.0.0.1:4222
+	// (antes isso gerava "[ERR] Failed to connect to NATS" a cada boot).
+	if url == "" {
+		return &natsProducer{loggerWrapper: loggerWrapper}
+	}
 	conn, err := nats.Connect(url)
 	if err != nil {
 		logger.LogError("Failed to connect to NATS: %v", err)
@@ -45,13 +50,11 @@ func (p *natsProducer) Produce(
 	natsEnable string,
 	userID string,
 ) error {
+	if p.conn == nil {
+		return nil // NATS desligado ou sem conexão: nada a fazer, sem log por evento
+	}
 	p.loggerWrapper.GetLogger(userID).LogInfo("[%s] NATS Producer - Starting produce for subject: %s", userID, queueName)
 	p.loggerWrapper.GetLogger(userID).LogInfo("[%s] NATS Producer - Global enabled: %v", userID, p.natsGlobalEnabled)
-
-	if p.conn == nil {
-		p.loggerWrapper.GetLogger(userID).LogWarn("[%s] NATS connection is nil", userID)
-		return nil
-	}
 
 	if natsEnable == "global" {
 		p.loggerWrapper.GetLogger(userID).LogInfo("[%s] Publishing to global subject: %s", userID, queueName)

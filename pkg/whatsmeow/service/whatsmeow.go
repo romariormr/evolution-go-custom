@@ -2312,8 +2312,13 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		} else {
 			mycli.loggerWrapper.GetLogger(mycli.userID).LogWarn("[%s] ID is not 66 or 67 or view_once, skipping", mycli.userID)
 		}
+	case *events.QR:
+		// O QR já é tratado pelo canal de QR (GetQRChannel). Não logar: os
+		// códigos de pareamento iam inteiros para o log em nível WARN.
+		return
 	default:
-		mycli.loggerWrapper.GetLogger(mycli.userID).LogWarn("[%s] Unhandled event %s: %+v", mycli.userID, fmt.Sprintf("%T", evt), evt)
+		// Só o tipo, sem o conteúdo: eventos podem trazer dados pessoais.
+		mycli.loggerWrapper.GetLogger(mycli.userID).LogDebug("[%s] Unhandled event %T", mycli.userID, evt)
 		return
 	}
 
