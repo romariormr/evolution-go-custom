@@ -2755,7 +2755,8 @@ func (s *sendService) SendMessage(instance *instance_model.Instance, msg *waE2E.
 
 	// InteractiveMessage (carousel, list com NativeFlow) requer biz node para WhatsApp não retornar erro 463
 	if messageType == "InteractiveMessage" {
-		bizNodes := nativeFlowNodes(recipient, flowNameOf(msg))
+		// Sempre "mixed": com name="single_select" o servidor responde 405 (testado no HML).
+		bizNodes := nativeFlowNodes(recipient, "mixed")
 		sendExtra.AdditionalNodes = &bizNodes
 	}
 

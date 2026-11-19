@@ -1,10 +1,14 @@
 # Evolution GO - Changelog
 
+## v0.17.7
+
+- **Lista (fallback e `nativeFlow: true`) voltava `405`.** Na 0.17.6 o `<native_flow>` passou a levar o nome do botão (`single_select`) e o servidor recusa; volta a ser sempre `mixed`, que é aceito.
+
 ## v0.17.6
 
 Comparando com o WA-AKG (v1.7.1-beta.3) e o upstream evolution-go (0.7.3), e testado no HML:
 
-- **Botões, lista e carrossel não apareciam em conversa 1:1.** O envio voltava OK, mas o WhatsApp descartava a mensagem: desde nov/2026 ele derruba mensagem interativa que leva o nó `<bot biz_bot="1">` (mesmo achado do WA-AKG, issue #112). O nó saiu do padrão; `INTERACTIVE_NODES=bot` volta a incluir. O `<native_flow>` agora leva o nome do botão quando há um só (ex.: `single_select` na lista).
+- **Botões, lista e carrossel não apareciam em conversa 1:1.** O envio voltava OK, mas o WhatsApp descartava a mensagem: desde nov/2026 ele derruba mensagem interativa que leva o nó `<bot biz_bot="1">` (mesmo achado do WA-AKG, issue #112). O nó saiu do padrão; `INTERACTIVE_NODES=bot` volta a incluir.
 - **Lista clássica recusada (`server returned error 405`)** agora é reenviada automaticamente no formato atual (`single_select`).
 - **`/user/info` e `/user/avatar` expiravam** (`info query timed out`, 75s) para números de telefone: o WhatsApp não responde mais essas consultas pelo telefone, só pelo LID. O número é convertido para o LID antes (mapa local ou `IsOnWhatsApp`). A resposta de `/user/info` continua indexada pelo número pedido, com o LID no campo `LID`.
 
