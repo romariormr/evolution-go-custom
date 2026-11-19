@@ -204,9 +204,15 @@ func newClient(p *policy) *http.Client {
 	}
 }
 
-// UserAgent padrão dos downloads. Sites como a Wikimedia recusam (403) o
-// "Go-http-client/1.1"; um UA identificado com contato é aceito.
-const UserAgent = "Mozilla/5.0 (compatible; Evolution-GO; +https://github.com/romariormr/evolution-go-custom)"
+// UserAgent dos downloads e webhooks. Sites como a Wikimedia recusam (403) o
+// "Go-http-client/1.1"; um UA identificado é aceito. Troque com
+// MEDIA_FETCH_USER_AGENT (ex.: incluindo a URL/contato da sua instalação).
+var UserAgent = func() string {
+	if v := strings.TrimSpace(os.Getenv("MEDIA_FETCH_USER_AGENT")); v != "" {
+		return v
+	}
+	return "Mozilla/5.0 (compatible; Evolution-GO)"
+}()
 
 type uaTransport struct{ rt http.RoundTripper }
 

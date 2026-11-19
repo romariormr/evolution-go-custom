@@ -162,7 +162,7 @@ type StickerStruct struct {
 	// PNG/JPG/WebP/GIF (GIF usa o 1º quadro); vira WebP 512x512 com fundo transparente.
 	Sticker string `json:"sticker"`
 	// Metadados opcionais, mostrados pelo WhatsApp ao tocar na figurinha.
-	PackName      string       `json:"packName,omitempty" example:"Grupo Newland"`
+	PackName      string       `json:"packName,omitempty" example:"Minha Empresa"`
 	PackPublisher string       `json:"packPublisher,omitempty" example:"Atendimento"`
 	Emojis        []string     `json:"emojis,omitempty" example:"😀"`
 	Id           string       `json:"id"`

@@ -81,7 +81,7 @@ func TestSchemeAndClassification(t *testing.T) {
 	}
 	p := &policy{blockPrivate: true}
 	cases := map[string]bool{ // true = bloqueado
-		"169.254.169.254": true, "127.0.0.1": true, "10.1.2.3": true, "172.16.210.58": true,
+		"169.254.169.254": true, "127.0.0.1": true, "10.1.2.3": true, "172.16.0.58": true,
 		"192.168.0.1": true, "100.64.1.1": true, "8.8.8.8": false, "::1": true, "fd00::1": true,
 	}
 	for ipStr, blocked := range cases {

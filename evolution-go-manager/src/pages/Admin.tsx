@@ -34,7 +34,7 @@ const LDAP_FIELDS: LdapField[] = [
   { key: 'ldap.url', label: 'URL', placeholder: 'ldaps://ad.dominio.local:636', kind: 'text' },
   { key: 'ldap.bind_dn', label: 'Bind DN (conta de serviço)', placeholder: 'CN=svc-evogo,OU=Integracoes,DC=dominio,DC=local', kind: 'text' },
   { key: 'ldap.bind_password', label: 'Senha da conta de serviço (fica cifrada)', kind: 'password' },
-  { key: 'ldap.base_dn', label: 'Base DN (busca)', placeholder: 'OU=GrupoNewland,DC=dominio,DC=local', kind: 'text' },
+  { key: 'ldap.base_dn', label: 'Base DN (busca)', placeholder: 'OU=Empresa,DC=dominio,DC=local', kind: 'text' },
   { key: 'ldap.user_filter', label: 'Filtro de usuário', placeholder: '(sAMAccountName=%s)', kind: 'text' },
   { key: 'ldap.group_attribute', label: 'Atributo de grupo', placeholder: 'memberOf', kind: 'text' },
   { key: 'ldap.admin_group_dn', label: 'Grupo do AD que vira administrador (opcional)', placeholder: 'CN=GG-EvoGo-Admins,OU=Grupos,DC=dominio,DC=local', kind: 'text' },

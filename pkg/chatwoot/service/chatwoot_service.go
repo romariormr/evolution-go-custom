@@ -413,7 +413,7 @@ func (s *chatwootService) NotifyConnected(instanceId string) error {
 }
 
 // jidToPhone extrai um telefone E.164-ish a partir de um JID do whatsmeow
-// (ex.: "558597731198:64@s.whatsapp.net" -> "+558597731198"). Usa o mesmo
+// (ex.: "5511999999999:64@s.whatsapp.net" -> "+5511999999999"). Usa o mesmo
 // identifier (JID completo) que a integração Node/Baileys já usa nessa
 // mesma conta Chatwoot, pra ficar consistente.
 func (s *chatwootService) ConversationHasAgent(instanceId, jid string) (bool, error) {
