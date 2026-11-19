@@ -32,6 +32,24 @@ type Service struct {
 	db            *gorm.DB
 	logger        *logger_wrapper.LoggerManager
 	retentionDays int
+	resolve       JIDResolver
+}
+
+// JIDResolver devolve o telefone (@s.whatsapp.net) de um LID, ou JID vazio.
+type JIDResolver func(instanceId string, lid types.JID) types.JID
+
+// SetJIDResolver: com ele, conversas 1:1 são gravadas sempre pelo telefone.
+// Sem isso a mesma pessoa virava duas conversas no histórico: o que a API
+// envia vai para o LID e o que chega vem pelo telefone (visto no HML).
+func (s *Service) SetJIDResolver(r JIDResolver) { s.resolve = r }
+
+func (s *Service) chatJID(instanceId string, jid types.JID) string {
+	if jid.Server == types.HiddenUserServer && s.resolve != nil {
+		if pn := s.resolve(instanceId, jid.ToNonAD()); !pn.IsEmpty() {
+			return pn.ToNonAD().String()
+		}
+	}
+	return jid.String()
 }
 
 // NewService: retentionDays <= 0 usa o padrão (90 dias).
@@ -117,6 +135,7 @@ func (s *Service) OnMessage(instance *instance_model.Instance, evt *events.Messa
 	if e == nil {
 		return
 	}
+	e.ChatJid = s.chatJID(instance.Id, evt.Info.Chat)
 	if err := s.db.Clauses(clause.OnConflict{DoNothing: true}).Create(e).Error; err != nil {
 		s.logWarn(instance.Id, "[HISTORY] erro ao gravar %s: %v", evt.Info.ID, err)
 	}
@@ -171,6 +190,7 @@ func (s *Service) OnHistorySync(instance *instance_model.Instance, client *whats
 			if e == nil {
 				continue
 			}
+			e.ChatJid = s.chatJID(instance.Id, parsed.Info.Chat)
 			if e.FromMe {
 				e.Status = webStatus(wm.GetStatus())
 			}
@@ -224,7 +244,7 @@ func (s *Service) OnSent(instance *instance_model.Instance, info types.MessageIn
 	e := &Entry{
 		InstanceId: instance.Id,
 		MessageId:  info.ID,
-		ChatJid:    info.Chat.String(),
+		ChatJid:    s.chatJID(instance.Id, info.Chat),
 		SenderJid:  info.Sender.ToNonAD().String(),
 		FromMe:     true,
 		IsGroup:    info.IsGroup,

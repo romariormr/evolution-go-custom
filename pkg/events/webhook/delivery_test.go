@@ -1,6 +1,7 @@
 package webhook_producer
 
 import (
+	"strings"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -55,6 +56,7 @@ func (m *memStore) Cleanup(time.Time, int) (int64, error) { return 0, nil }
 
 func testProducer(store DeliveryStore, mode string) *WebhookProducer {
 	retryBackoff = []time.Duration{5 * time.Millisecond, 5 * time.Millisecond}
+	os.Setenv("WEBHOOK_ALLOWED_HOSTS", "127.0.0.1") // httptest escuta em loopback
 	return NewWebhookProducerWithDeliveries("", logger_wrapper.NewLoggerManager(&config.Config{LogDirectory: filepath.Join(os.TempDir(), "evogo-test-logs"), LogType: "console"}), store, mode)
 }
 
@@ -85,7 +87,7 @@ func TestFailuresModeRecordsFailedWithPayload(t *testing.T) {
 		t.Fatalf("esperava 1 entrega failed, veio %d (rows=%v)", len(list), st.rows)
 	}
 	d := list[0]
-	if d.Attempts != 3 || d.HttpStatus != 500 || d.Payload == "" || d.Response != "boom" {
+	if d.Attempts != 3 || d.HttpStatus != 500 || d.Payload == "" || d.Response != "4 bytes" {
 		t.Fatalf("registro incompleto: %+v", d)
 	}
 	if atomic.LoadInt32(&hits) != 3 {
@@ -147,5 +149,28 @@ func TestOffModeRecordsNothing(t *testing.T) {
 	p.deliver(srv.URL, []byte(`{}`), "inst", "message")
 	if len(st.rows) != 0 {
 		t.Fatalf("modo off não deveria gravar")
+	}
+}
+
+func TestLoopbackBlockedAndBodyNotReturned(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("segredo-interno"))
+	}))
+	defer srv.Close()
+
+	// com exceção para 127.0.0.1: entrega, mas o corpo não volta no teste
+	p := testProducer(newMem(), DeliveryLogAll)
+	res := p.TestWebhooks("inst", []string{srv.URL})
+	if len(res) != 1 || !res[0].Ok || res[0].Response != "15 bytes" {
+		t.Fatalf("corpo da resposta não deveria ser devolvido: %+v", res)
+	}
+
+	// sem exceção: loopback é sempre bloqueado
+	os.Setenv("WEBHOOK_ALLOWED_HOSTS", "")
+	p2 := NewWebhookProducerWithDeliveries("", p.loggerWrapper, newMem(), DeliveryLogAll)
+	defer os.Setenv("WEBHOOK_ALLOWED_HOSTS", "127.0.0.1")
+	res = p2.TestWebhooks("inst", []string{srv.URL})
+	if len(res) != 1 || res[0].Ok || !strings.Contains(res[0].Error, "bloqueado") {
+		t.Fatalf("webhook para loopback deveria ser bloqueado: %+v", res)
 	}
 }

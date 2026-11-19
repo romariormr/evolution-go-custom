@@ -1,5 +1,15 @@
 # Evolution GO - Changelog
 
+## v0.17.8
+
+### Segurança
+- **Webhooks com proteção contra SSRF** (mesma regra dos downloads de mídia). Loopback (`127.0.0.0/8`, `localhost`), link-local (inclui `169.254.169.254`, metadados de nuvem) e multicast são sempre bloqueados. Rede privada continua liberada (n8n interno), a não ser com `WEBHOOK_BLOCK_PRIVATE=true`; exceções em `WEBHOOK_ALLOWED_HOSTS` (host, host:porta ou CIDR). O IP é conferido na conexão (vale para redirecionamentos e DNS).
+- **A resposta do destino não é mais devolvida nem gravada** no teste de webhook (`POST /instance/webhooks/:id/test`) e no log de entregas: fica só o status HTTP e o tamanho (`"N bytes"`). Antes, quem tinha só a apikey de uma instância conseguia ler serviços internos por esse caminho.
+- ⚠️ Webhook apontando para `localhost`/`127.0.0.1` deixa de funcionar; libere com `WEBHOOK_ALLOWED_HOSTS` se for intencional.
+
+### Correções
+- **Histórico: a mesma pessoa virava duas conversas.** O que a API envia ia para o LID (`...@lid`) e o que chega vinha pelo telefone. Conversas 1:1 agora são gravadas sempre pelo telefone quando o LID é conhecido. (Registros antigos não são migrados.)
+
 ## v0.17.7
 
 - **Lista (fallback e `nativeFlow: true`) voltava `405`.** Na 0.17.6 o `<native_flow>` passou a levar o nome do botão (`single_select`) e o servidor recusa; volta a ser sempre `mixed`, que é aceito.

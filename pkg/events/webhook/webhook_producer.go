@@ -12,6 +12,7 @@ import (
 
 	producer_interfaces "github.com/EvolutionAPI/evolution-go/pkg/events/interfaces"
 	logger_wrapper "github.com/EvolutionAPI/evolution-go/pkg/logger"
+	"github.com/EvolutionAPI/evolution-go/pkg/safefetch"
 )
 
 // Espera entre tentativas (crescente). Total ~3 min antes de desistir — cobre
@@ -58,7 +59,10 @@ func NewWebhookProducerWithDeliveries(
 	p := &WebhookProducer{
 		url:           url,
 		loggerWrapper: loggerWrapper,
-		httpClient:    &http.Client{Timeout: requestTimeout},
+		// Mesma proteção SSRF dos downloads de mídia: loopback e metadados de
+		// nuvem sempre bloqueados; rede privada liberada (n8n interno), a não
+		// ser com WEBHOOK_BLOCK_PRIVATE=true (exceções em WEBHOOK_ALLOWED_HOSTS).
+		httpClient:    safefetch.NewClient("WEBHOOK", requestTimeout),
 		store:         store,
 		logMode:       logMode,
 	}
@@ -134,7 +138,7 @@ func (p *WebhookProducer) deliver(url string, body []byte, userID, event string)
 		rec.Status = status
 		rec.HttpStatus = res.status
 		rec.LatencyMs = res.latency.Milliseconds()
-		rec.Response = truncate(string(res.body), maxStoredResponse)
+		rec.Response = bodySummary(res.body)
 		rec.LastError = ""
 		if res.err != nil {
 			rec.LastError = truncate(res.err.Error(), maxStoredResponse)
@@ -151,7 +155,7 @@ func (p *WebhookProducer) deliver(url string, body []byte, userID, event string)
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		res := p.send(url, body)
 		if res.err == nil {
-			p.loggerWrapper.GetLogger(userID).LogInfo("[%s] webhook sent successfully - url: %s, status: %d, response: %s", userID, url, res.status, truncate(string(res.body), 200))
+			p.loggerWrapper.GetLogger(userID).LogInfo("[%s] webhook sent successfully - url: %s, status: %d, response: %s", userID, url, res.status, bodySummary(res.body))
 			record(attempt, res, DeliverySuccess)
 			return
 		}
@@ -228,7 +232,7 @@ func (p *WebhookProducer) ResendDelivery(instanceId, deliveryId string) (*Webhoo
 	d.Attempts++
 	d.HttpStatus = res.status
 	d.LatencyMs = res.latency.Milliseconds()
-	d.Response = truncate(string(res.body), maxStoredResponse)
+	d.Response = bodySummary(res.body)
 	if res.err != nil {
 		d.Status = DeliveryFailed
 		d.LastError = truncate(res.err.Error(), maxStoredResponse)
@@ -270,7 +274,7 @@ func (p *WebhookProducer) TestWebhooks(instanceId string, urls []string) []TestR
 			continue
 		}
 		res := p.send(u, payload)
-		tr := TestResult{Url: u, Ok: res.err == nil, HttpStatus: res.status, LatencyMs: res.latency.Milliseconds(), Response: truncate(string(res.body), maxStoredResponse)}
+		tr := TestResult{Url: u, Ok: res.err == nil, HttpStatus: res.status, LatencyMs: res.latency.Milliseconds(), Response: bodySummary(res.body)}
 		if res.err != nil {
 			tr.Error = res.err.Error()
 		}
@@ -287,6 +291,13 @@ func (p *WebhookProducer) TestWebhooks(instanceId string, urls []string) []TestR
 		}
 	}
 	return out
+}
+
+// bodySummary: o corpo da resposta do destino NÃO é devolvido nem gravado, só
+// o tamanho. Devolver o corpo transformava o teste/log de webhook num leitor
+// de serviços internos (SSRF com leitura) para quem tem só a apikey.
+func bodySummary(b []byte) string {
+	return fmt.Sprintf("%d bytes", len(b))
 }
 
 // CreateGlobalQueues não faz nada para webhook producer
