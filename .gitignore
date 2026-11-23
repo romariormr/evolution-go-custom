@@ -27,3 +27,8 @@ pkg/graphify-out/
 # Handoff local com segredos — NUNCA publicar (repo publico)
 HANDOFF-SESSAO.md
 MEMORIA-PROJETO.md
+
+# Relatórios e anotações locais (não publicar)
+relatorio-*
+*.local.md
+whatsmeow-lib/
