@@ -130,8 +130,9 @@ type LinkStruct struct {
 }
 
 type MediaStruct struct {
-	Number       string       `json:"number"`
-	Url          string       `json:"url"`
+	Number string `json:"number"`
+	Url    string `json:"url"`
+	// Type: image | video | audio | document | ptv | gif (MP4 ou GIF enviado como GIF animado)
 	Type         string       `json:"type"`
 	Caption      string       `json:"caption"`
 	Filename     string       `json:"filename"`
@@ -141,6 +142,8 @@ type MediaStruct struct {
 	MentionAll   bool         `json:"mentionAll"`
 	FormatJid    *bool        `json:"formatJid,omitempty"`
 	Quoted       QuotedStruct `json:"quoted"`
+
+	asGif bool // type "gif": vira vídeo com GifPlayback (ver prepareGif)
 }
 
 type PollStruct struct {
@@ -165,6 +168,10 @@ type StickerStruct struct {
 	PackName      string       `json:"packName,omitempty" example:"Minha Empresa"`
 	PackPublisher string       `json:"packPublisher,omitempty" example:"Atendimento"`
 	Emojis        []string     `json:"emojis,omitempty" example:"😀"`
+	// Audio (experimental): URL, data URI ou base64 de um áudio que vira
+	// "figurinha com som". Quem ainda não tem o recurso no WhatsApp vê a
+	// figurinha sem som. GIF/MP4/WebP animado em Sticker viram figurinha animada.
+	Audio string `json:"audio,omitempty"`
 	Id           string       `json:"id"`
 	Delay        int32        `json:"delay"`
 	MentionedJID []string     `json:"mentionedJid"`
@@ -1099,6 +1106,7 @@ func gerarThumbnail(fileData []byte) []byte {
 }
 
 func (s *sendService) SendMediaFile(data *MediaStruct, fileData []byte, instance *instance_model.Instance) (*MessageSendStruct, error) {
+	markGif(data)
 	return s.sendMediaFileWithRetry(data, fileData, instance, 3)
 }
 
@@ -1116,6 +1124,11 @@ func (s *sendService) sendMediaFileWithRetry(data *MediaStruct, fileData []byte,
 
 		mime, _ := mimetype.DetectReader(bytes.NewReader(fileData))
 		mimeType := mime.String()
+		if data.asGif {
+			if fileData, mimeType, err = prepareGif(fileData, mimeType); err != nil {
+				return nil, err
+			}
+		}
 
 		var uploadType whatsmeow.MediaType
 		var duration int
@@ -1337,6 +1350,9 @@ func (s *sendService) sendMediaFileWithRetry(data *MediaStruct, fileData []byte,
 			return nil, errors.New("invalid media type")
 		}
 
+		if data.asGif && media.GetVideoMessage() != nil {
+			media.VideoMessage.GifPlayback = proto.Bool(true)
+		}
 		message, err := s.SendMessage(instance, media, mediaType, &SendDataStruct{
 			Id:           data.Id,
 			Number:       data.Number,
@@ -1370,6 +1386,7 @@ func (s *sendService) sendMediaFileWithRetry(data *MediaStruct, fileData []byte,
 }
 
 func (s *sendService) SendMediaUrl(data *MediaStruct, instance *instance_model.Instance) (*MessageSendStruct, error) {
+	markGif(data)
 	return s.sendMediaUrlWithRetry(data, instance, 3)
 }
 
@@ -1410,6 +1427,11 @@ func (s *sendService) sendMediaUrlWithRetry(data *MediaStruct, instance *instanc
 		mimeType := mime.String()
 		if strings.HasSuffix(strings.ToLower(data.Url), ".mp4") {
 			mimeType = "video/mp4"
+		}
+		if data.asGif {
+			if fileData, mimeType, err = prepareGif(fileData, mimeType); err != nil {
+				return nil, err
+			}
 		}
 
 		s.loggerWrapper.GetLogger(instance.Id).LogInfo("[%s] Tipo MIME detectado: %s", instance.Id, mimeType)
@@ -1640,6 +1662,9 @@ func (s *sendService) sendMediaUrlWithRetry(data *MediaStruct, instance *instanc
 		}
 
 		messageStart := time.Now()
+		if data.asGif && media.GetVideoMessage() != nil {
+			media.VideoMessage.GifPlayback = proto.Bool(true)
+		}
 		message, err := s.SendMessage(instance, media, mediaType, &SendDataStruct{
 			Id:           data.Id,
 			Number:       data.Number,
@@ -1746,7 +1771,14 @@ func (s *sendService) SendSticker(data *StickerStruct, instance *instance_model.
 	if err != nil {
 		return nil, err
 	}
-	filedata, err := buildSticker(raw, stickerMeta{PackName: data.PackName, PackPublisher: data.PackPublisher, Emojis: data.Emojis})
+	meta := stickerMeta{PackName: data.PackName, PackPublisher: data.PackPublisher, Emojis: data.Emojis}
+	animated := isAnimatedSource(raw)
+	var filedata []byte
+	if animated {
+		filedata, err = buildAnimatedSticker(raw, meta)
+	} else {
+		filedata, err = buildSticker(raw, meta)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1754,6 +1786,33 @@ func (s *sendService) SendSticker(data *StickerStruct, instance *instance_model.
 	uploaded, err := client.Upload(context.Background(), filedata, whatsmeow.MediaImage)
 	if err != nil {
 		return nil, fmt.Errorf("failed to upload sticker: %v", err)
+	}
+
+	// Figurinha com som (experimental): áudio Opus embutido na StickerMessage.
+	var stickerAudio *waE2E.AudioMessage
+	if strings.TrimSpace(data.Audio) != "" {
+		rawAudio, err := loadStickerSource(data.Audio)
+		if err != nil {
+			return nil, fmt.Errorf("audio: %v", err)
+		}
+		opus, seconds, err := convertAudioToOpusWithDuration(rawAudio)
+		if err != nil {
+			return nil, fmt.Errorf("audio: %v", err)
+		}
+		up, err := client.Upload(context.Background(), opus, whatsmeow.MediaAudio)
+		if err != nil {
+			return nil, fmt.Errorf("failed to upload sticker audio: %v", err)
+		}
+		stickerAudio = &waE2E.AudioMessage{
+			URL:           proto.String(up.URL),
+			DirectPath:    proto.String(up.DirectPath),
+			MediaKey:      up.MediaKey,
+			Mimetype:      proto.String("audio/ogg; codecs=opus"),
+			FileEncSHA256: up.FileEncSHA256,
+			FileSHA256:    up.FileSHA256,
+			FileLength:    proto.Uint64(uint64(len(opus))),
+			Seconds:       proto.Uint32(uint32(seconds)),
+		}
 	}
 
 	msg := &waE2E.Message{StickerMessage: &waE2E.StickerMessage{
@@ -1766,8 +1825,11 @@ func (s *sendService) SendSticker(data *StickerStruct, instance *instance_model.
 		FileLength:    proto.Uint64(uint64(len(filedata))),
 		Width:         proto.Uint32(stickerSize),
 		Height:        proto.Uint32(stickerSize),
-		IsAnimated:    proto.Bool(false),
+		IsAnimated:    proto.Bool(animated),
 	}}
+	if stickerAudio != nil {
+		msg.StickerMessage.Audio = &waE2E.StickerMessage_AudioMessage{AudioMessage: stickerAudio}
+	}
 
 	message, err := s.SendMessage(instance, msg, "StickerMessage", &SendDataStruct{
 		Id:           data.Id,

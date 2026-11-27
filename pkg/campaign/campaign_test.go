@@ -40,7 +40,7 @@ func TestBuildDedupAndDefaults(t *testing.T) {
 func TestBuildValidation(t *testing.T) {
 	bad := []*CreateRequest{
 		{Message: Message{Text: ""}, Numbers: "5511999990001"},
-		{Type: "media", Message: Message{MediaUrl: "https://x/y.png", MediaType: "gif"}, Numbers: "5511999990001"},
+		{Type: "media", Message: Message{MediaUrl: "https://x/y.png", MediaType: "sticker"}, Numbers: "5511999990001"},
 		{Type: "sticker", Message: Message{Text: "x"}, Numbers: "5511999990001"},
 		{Message: Message{Text: "x"}, Numbers: "abc"},
 	}

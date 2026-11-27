@@ -182,9 +182,9 @@ func (m *Message) validate(msgType string) error {
 			return errors.New("message.mediaUrl é obrigatório")
 		}
 		switch m.MediaType {
-		case "image", "video", "audio", "document":
+		case "image", "video", "audio", "document", "gif":
 		default:
-			return errors.New("message.mediaType deve ser image, video, audio ou document")
+			return errors.New("message.mediaType deve ser image, video, audio, document ou gif")
 		}
 	default:
 		return fmt.Errorf("type inválido: %q (text ou media)", msgType)

@@ -1,5 +1,12 @@
 # Evolution GO - Changelog
 
+## v0.18.0
+
+### Novidades
+- **GIF** (`POST /send/media` com `"type": "gif"`): MP4 enviado como GIF animado (`gifPlayback`), em loop e sem som, como o WhatsApp mostra GIFs. `.gif` é convertido para MP4 automaticamente. Vale também para campanhas e agendamentos de mídia.
+- **Figurinha animada** (`POST /send/sticker`): GIF, MP4/WebM ou WebP animado vira figurinha animada 512x512 com fundo transparente (até 8s, reduzindo qualidade até caber em 500 KB). Imagem estática continua como antes.
+- **Figurinha com som** (experimental, campo `audio` em `/send/sticker`: URL, data URI ou base64): o áudio é convertido para Opus e embutido na figurinha, o recurso novo do WhatsApp (ainda em liberação gradual). Quem não tem o recurso vê a figurinha sem som.
+
 ## v0.17.9
 
 Projeto aberto: nada específico de uma instalação fica fixo no código ou no yaml.
