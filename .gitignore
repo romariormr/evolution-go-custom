@@ -32,3 +32,6 @@ MEMORIA-PROJETO.md
 relatorio-*
 *.local.md
 whatsmeow-lib/
+
+# Scripts locais de operação (HML/produção) — não publicar
+.ops-local/
