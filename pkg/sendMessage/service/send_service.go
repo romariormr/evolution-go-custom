@@ -3,6 +3,7 @@ package send_service
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -1827,11 +1828,28 @@ func (s *sendService) SendSticker(data *StickerStruct, instance *instance_model.
 		Height:        proto.Uint32(stickerSize),
 		IsAnimated:    proto.Bool(animated),
 	}}
+	if len(data.Emojis) > 0 {
+		msg.StickerMessage.Emojis = proto.String(strings.Join(data.Emojis, ""))
+	}
+	messageType := "StickerMessage"
 	if stickerAudio != nil {
-		msg.StickerMessage.Audio = &waE2E.StickerMessage_AudioMessage{AudioMessage: stickerAudio}
+		// Formato dos clientes oficiais (capturado no HML): a figurinha com som vai
+		// dentro de audioStickerMessage, com messageSecret no contexto.
+		st := msg.StickerMessage
+		st.Audio = &waE2E.StickerMessage_AudioMessage{AudioMessage: stickerAudio}
+		st.StickerSentTS = proto.Int64(time.Now().UnixMilli())
+		secret := make([]byte, 32)
+		if _, err := rand.Read(secret); err != nil {
+			return nil, err
+		}
+		msg = &waE2E.Message{
+			AudioStickerMessage: &waE2E.FutureProofMessage{Message: &waE2E.Message{StickerMessage: st}},
+			MessageContextInfo:  &waE2E.MessageContextInfo{MessageSecret: secret},
+		}
+		messageType = "AudioStickerMessage"
 	}
 
-	message, err := s.SendMessage(instance, msg, "StickerMessage", &SendDataStruct{
+	message, err := s.SendMessage(instance, msg, messageType, &SendDataStruct{
 		Id:           data.Id,
 		Number:       data.Number,
 		Quoted:       data.Quoted,
@@ -2622,6 +2640,13 @@ func (s *sendService) SendMessage(instance *instance_model.Instance, msg *waE2E.
 					QuotedMessage: &waE2E.Message{Conversation: proto.String("")},
 				}
 			}
+		case "AudioStickerMessage":
+			msg.AudioStickerMessage.Message.StickerMessage.ContextInfo = &waE2E.ContextInfo{
+				StanzaID:      proto.String(data.Quoted.MessageID),
+				Participant:   proto.String(data.Quoted.Participant),
+				QuotedMessage: &waE2E.Message{Conversation: proto.String("")},
+			}
+			isMedia = true
 		case "AlbumMessage":
 			msg.AlbumMessage.ContextInfo = &waE2E.ContextInfo{
 				StanzaID:      proto.String(data.Quoted.MessageID),
@@ -2666,6 +2691,8 @@ func (s *sendService) SendMessage(instance *instance_model.Instance, msg *waE2E.
 			// ContextInfo already set in SendCarousel/SendButton/SendList
 		case "ListMessage":
 			// ContextInfo already set in SendList
+		case "AudioStickerMessage":
+			// figurinha com som (SendSticker): sem ContextInfo
 		case "AlbumMessage":
 			// âncora do álbum (SendAlbum): sem ContextInfo
 		default:

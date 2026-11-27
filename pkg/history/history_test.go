@@ -94,3 +94,19 @@ func TestEntryFromEventSkips(t *testing.T) {
 		t.Fatalf("entrada inesperada: %+v", e)
 	}
 }
+
+func TestDescribeSoundAndAnimatedSticker(t *testing.T) {
+	yes := true
+	emoji := "😂"
+	snd := &waE2E.Message{AudioStickerMessage: &waE2E.FutureProofMessage{Message: &waE2E.Message{
+		StickerMessage: &waE2E.StickerMessage{IsAnimated: &yes, Emojis: &emoji,
+			Audio: &waE2E.StickerMessage_AudioMessage{AudioMessage: &waE2E.AudioMessage{}}},
+	}}}
+	if kind, content, _, _, _ := describe(snd); kind != "sticker_audio" || content != emoji {
+		t.Fatalf("figurinha com som: %q %q", kind, content)
+	}
+	anim := &waE2E.Message{StickerMessage: &waE2E.StickerMessage{IsAnimated: &yes}}
+	if kind, _, _, _, _ := describe(anim); kind != "sticker_animated" {
+		t.Fatalf("figurinha animada: %q", kind)
+	}
+}

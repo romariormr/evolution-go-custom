@@ -1,5 +1,14 @@
 # Evolution GO - Changelog
 
+## v0.18.1
+
+Formato real da **figurinha com som**, capturado de um celular no HML: a mensagem chega embrulhada em `audioStickerMessage → message → stickerMessage`, com o áudio (Opus) dentro da figurinha e `messageSecret` no contexto.
+
+- **Recebimento:** antes caía como tipo desconhecido ("other"), sem mídia. Agora a figurinha é desembrulhada e tratada como figurinha (webhook, Chatwoot, histórico, download). O áudio é baixado à parte: `stickerAudioUrl` (MinIO) ou `stickerAudioBase64`, mais `stickerAudioSeconds`, no `Message` do webhook.
+- **Histórico:** novos tipos `sticker_audio` e `sticker_animated` (o conteúdo traz os emojis da figurinha).
+- **Figurinha animada recebida** é guardada como WebP animado (antes virava PNG do primeiro quadro).
+- **Envio com `audio`** passa a usar o mesmo embrulho dos clientes oficiais (`audioStickerMessage` + `messageSecret` + `stickerSentTS`); `emojis` também vai no campo da figurinha.
+
 ## v0.18.0
 
 ### Novidades

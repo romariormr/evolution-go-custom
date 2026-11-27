@@ -90,6 +90,9 @@ func describe(m *waE2E.Message) (msgType, content, mime, fileName, quoted string
 	if inner := m.GetViewOnceMessageV2().GetMessage(); inner != nil {
 		m = inner
 	}
+	if inner := m.GetAudioStickerMessage().GetMessage(); inner != nil && m.StickerMessage == nil {
+		m = inner // figurinha com som
+	}
 	switch {
 	case m.Conversation != nil:
 		return "text", m.GetConversation(), "", "", ""
@@ -113,7 +116,13 @@ func describe(m *waE2E.Message) (msgType, content, mime, fileName, quoted string
 		return "document", x.GetCaption(), x.GetMimetype(), x.GetFileName(), x.GetContextInfo().GetStanzaID()
 	case m.StickerMessage != nil:
 		x := m.GetStickerMessage()
-		return "sticker", "", x.GetMimetype(), "", x.GetContextInfo().GetStanzaID()
+		kind := "sticker"
+		if x.GetAudioMessage() != nil {
+			kind = "sticker_audio"
+		} else if x.GetIsAnimated() {
+			kind = "sticker_animated"
+		}
+		return kind, x.GetEmojis(), x.GetMimetype(), "", x.GetContextInfo().GetStanzaID()
 	case m.LocationMessage != nil:
 		x := m.GetLocationMessage()
 		return "location", strings.TrimSpace(x.GetName() + " " + x.GetAddress()), "", "", ""

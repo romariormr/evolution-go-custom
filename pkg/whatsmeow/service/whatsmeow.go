@@ -1243,6 +1243,7 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 	case *events.Message:
 		doWebhook = true
 		postMap["event"] = "Message"
+		unwrapAudioSticker(evt)
 		var historyMediaURL, historyMediaMime string
 		// Keep a canonical per-chat activity index. Group metadata does not carry
 		// the last message timestamp, so this event is the authoritative source.
@@ -1612,7 +1613,11 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 						mediaSize = int64(*sticker.FileLength)
 					}
 
-					if err == nil {
+					if err == nil && sticker.GetIsAnimated() {
+						// Animada: PNG congelaria no 1º quadro; mantém o WebP animado.
+						extension = ".webp"
+						mimeType = "image/webp"
+					} else if err == nil {
 						webpReader := bytes.NewReader(data)
 						img, decErr := webp.Decode(webpReader)
 						if decErr != nil {
@@ -1780,6 +1785,17 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 							messageMap["mimetype"] = mimeType
 							historyMediaURL, historyMediaMime = mediaURL, mimeType
 						}
+						// Figurinha com som: o áudio vem num arquivo separado.
+						if sa := sticker.GetAudioMessage(); sa != nil {
+							if audioData, aerr := mycli.WAClient.Download(downloadCtx, sa); aerr == nil {
+								if audioURL, serr := mycli.mediaStorage.Store(context.Background(), audioData, evt.Info.ID+"-audio.ogg", "audio/ogg"); serr == nil {
+									messageMap["stickerAudioUrl"] = audioURL
+									messageMap["stickerAudioSeconds"] = sa.GetSeconds()
+								}
+							} else {
+								mycli.loggerWrapper.GetLogger(mycli.userID).LogWarn("[%s] Failed to download sticker audio - ID: %s: %v", mycli.userID, evt.Info.ID, aerr)
+							}
+						}
 					} else {
 						mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Encoding to base64 - ID: %s, Size: %d bytes", mycli.userID, evt.Info.ID, len(data))
 						encodeStart := time.Now()
@@ -1789,6 +1805,12 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 
 						mycli.loggerWrapper.GetLogger(mycli.userID).LogInfo("[%s] Base64 encoding completed - ID: %s, Original: %d bytes, Encoded: %d chars, Duration: %v", mycli.userID, evt.Info.ID, len(data), len(encodeData), encodeDuration)
 						messageMap["base64"] = encodeData
+						if sa := sticker.GetAudioMessage(); sa != nil {
+							if audioData, aerr := mycli.WAClient.Download(downloadCtx, sa); aerr == nil {
+								messageMap["stickerAudioBase64"] = base64.StdEncoding.EncodeToString(audioData)
+								messageMap["stickerAudioSeconds"] = sa.GetSeconds()
+							}
+						}
 					}
 				} else {
 					mycli.loggerWrapper.GetLogger(mycli.userID).LogWarn("[%s] Skipping media storage due to download failure - ID: %s", mycli.userID, evt.Info.ID)
@@ -2520,6 +2542,19 @@ func decryptPollVoteLIDAware(cli *whatsmeow.Client, evt *events.Message) (*waE2E
 		return d, nil
 	}
 	return nil, err
+}
+
+// unwrapAudioSticker: a "figurinha com som" chega embrulhada em
+// audioStickerMessage{message{stickerMessage{audio}}}, que o whatsmeow não
+// desembrulha. Copia a StickerMessage para o topo para que download, webhook,
+// Chatwoot e histórico a tratem como figurinha (o embrulho continua no evento).
+func unwrapAudioSticker(evt *events.Message) {
+	if evt == nil || evt.Message == nil || evt.Message.StickerMessage != nil {
+		return
+	}
+	if inner := evt.Message.GetAudioStickerMessage().GetMessage().GetStickerMessage(); inner != nil {
+		evt.Message.StickerMessage = inner
+	}
 }
 
 func contains(subscriptions []string, event string) bool {
